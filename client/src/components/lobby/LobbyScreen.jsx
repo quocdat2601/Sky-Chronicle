@@ -93,11 +93,8 @@ export function LobbyScreen() {
           <div className="panel" style={{ padding: 20 }}>
             <h3 style={{ marginBottom: 12, color: 'var(--text-gold)' }}>⚙ Preparation</h3>
             <div className="flex-col gap-sm">
-              <button className="btn btn-ghost w-full" onClick={() => setScreen('party_builder')}>
-                👥 Build Party
-              </button>
-              <button className="btn btn-ghost w-full" onClick={() => setScreen('grid_builder')}>
-                🗡 Weapon Grid
+              <button className="btn btn-ghost w-full" onClick={() => setScreen('party')}>
+                ⚔ Party &amp; Grid Setup
               </button>
             </div>
           </div>
