@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useGameStore } from '../../store/gameStore.js';
-import { ElementBadge, formatNumber } from '../../lib/ui.jsx';
+import { ElementBadge } from '../../lib/ui.jsx';
 
 // ── CONSTANTS ─────────────────────────────────────────────────────────────────
 const TYPE_ICON  = { ATTACK:'⚔', DEFENSE:'🛡', HEAL:'💚', BALANCE:'⚖' };
@@ -8,8 +8,7 @@ const TYPE_COLOR = { ATTACK:'var(--hp-red)', DEFENSE:'var(--charge-blue)', HEAL:
 const RARITY_STARS = { SSR:'★★★', SR:'★★', R:'★' };
 const SKILL_LABEL = { ATK_NORMAL:'Normal', ATK_OMEGA:'Omega', ATK_EX:'EX', HP_BOOST:'HP+', CRITICAL_RATE:'Crit', CHARGE_SPEED:'Spd', STAMINA:'Stam', ENMITY:'Enmity', DMG_CAP:'Cap' };
 const SKILL_CLR   = { ATK_OMEGA:'var(--charge-blue)', ATK_EX:'var(--text-gold)', ATK_NORMAL:'var(--text-mid)', STAMINA:'var(--hp-green)', ENMITY:'var(--hp-red)', CRITICAL_RATE:'var(--crit-orange)' };
-
-const ELEM_EMOJI = { FIRE:'🔥', WATER:'💧', EARTH:'🌍', WIND:'🌀', LIGHT:'☀', DARK:'🌑' };
+const ELEM_EMOJI  = { FIRE:'🔥', WATER:'💧', EARTH:'🌍', WIND:'🌀', LIGHT:'☀', DARK:'🌑' };
 
 function skillMag(sk) {
   return ((sk.magnitude_base + (sk.skill_level - 1) * sk.magnitude_per_level) * 100).toFixed(1) + '%';
@@ -25,79 +24,152 @@ export function PartyPage() {
     setScreen,
   } = useGameStore();
 
-  const [active_tab, setActiveTab] = useState('character'); // character | weapon | summon
-  const [slot_picker, setSlotPicker] = useState(null);      // which party slot is being picked
-  const [weapon_slot, setWeaponSlot] = useState(null);      // which weapon slot is being picked
-  const [filter_elem, setFilterElem] = useState('ALL');
-  const [detail_char, setDetailChar] = useState(null);
+  const [active_tab,   setActiveTab]   = useState('character');
+  const [weapon_slot,  setWeaponSlot]  = useState(null);
+  const [filter_elem,  setFilterElem]  = useState('ALL');
+  const [auto_modal,   setAutoModal]   = useState(false); // Auto Select modal open
+
+  // ── Slot swap state ─────────────────────────────────────────────────────────
+  // selected_slot: index (0-2) of the header slot currently selected for swapping
+  // When a slot is selected:
+  //   - Clicking another header slot → swap those two positions
+  //   - Clicking a roster char → replace that slot with the char
+  //   - Clicking same slot again → deselect
+  const [selected_slot, setSelectedSlot] = useState(null); // 0|1|2|null
+  const [qc_staged,     setQcStaged]     = useState(null); // char id staged from roster
 
   useEffect(() => { loadCatalog(); calculateGridStats(); }, []);
   useEffect(() => { calculateGridStats(); }, [grid_weapon_ids]);
 
-  const main_ids  = party_character_ids.filter(Boolean);
-  const getChar   = id => catalog_characters.find(c => c.id === id);
-  const getWeapon = id => catalog_weapons.find(w => w.id === id);
+  const main_ids    = party_character_ids.filter(Boolean);
+  const getChar     = id => catalog_characters.find(c => c.id === id);
+  const getWeapon   = id => catalog_weapons.find(w => w.id === id);
   const main_weapon = getWeapon(grid_weapon_ids[0]);
 
+  // ── Normal add/remove (no slot selected) ───────────────────────────────────
   const toggleChar = id => {
+    if (selected_slot !== null) {
+      // Replace selected_slot with this char
+      assignCharToSlot(id, selected_slot);
+      return;
+    }
     if (main_ids.includes(id)) {
       setPartyCharacters(main_ids.filter(x => x !== id));
-      if (detail_char?.id === id) setDetailChar(null);
     } else if (main_ids.length < 3) {
       setPartyCharacters([...main_ids, id]);
     }
-    setSlotPicker(null);
   };
+
+  // ── Slot selection & swap ───────────────────────────────────────────────────
+  const onHeaderSlotTap = slot_index => {
+    if (selected_slot === slot_index) {
+      // Deselect
+      setSelectedSlot(null);
+      setQcStaged(null);
+      return;
+    }
+    if (selected_slot !== null) {
+      // Swap the two slots
+      const new_ids = [...Array(3)].map((_, i) => main_ids[i] || null);
+      const tmp = new_ids[selected_slot];
+      new_ids[selected_slot] = new_ids[slot_index] || null;
+      new_ids[slot_index] = tmp;
+      setPartyCharacters(new_ids.filter(Boolean));
+      setSelectedSlot(null);
+      return;
+    }
+    // Select this slot
+    setSelectedSlot(slot_index);
+  };
+
+  // Assign a char from roster to a specific slot index
+  const assignCharToSlot = (char_id, slot_index) => {
+    const new_ids = [...Array(3)].map((_, i) => main_ids[i] || null);
+    // Remove char from wherever it already is
+    const existing = new_ids.indexOf(char_id);
+    if (existing !== -1) new_ids[existing] = null;
+    new_ids[slot_index] = char_id;
+    setPartyCharacters(new_ids.filter(Boolean));
+    setSelectedSlot(null);
+    setQcStaged(null);
+  };
+
+  const clearSelection = () => { setSelectedSlot(null); setQcStaged(null); };
 
   const assignWeapon = id => {
-    if (weapon_slot !== null) {
-      setGridWeapon(weapon_slot, id);
-      setWeaponSlot(null);
-    }
+    if (weapon_slot !== null) { setGridWeapon(weapon_slot, id); }
+    // slot stays selected so user can keep browsing
   };
 
-  // Compute party totals for MC banner
-  const total_hp  = main_ids.reduce((s, id) => s + (getChar(id)?.base_hp || 0), 0)
-                  + (grid_stats?.grid_hp || 0);
-  const total_atk = main_ids.reduce((s, id) => s + (getChar(id)?.base_atk || 0), 0)
-                  + (grid_stats?.grid_atk || 0);
+  // Auto-fill: sort by chosen stat, fill slots with matching element weapons
+  const autoFillWeapons = (stat, element) => {
+    const pool = catalog_weapons.filter(w => element === 'ALL' || w.element === element);
+    // Sort by chosen stat descending
+    const sorted = [...pool].sort((a, b) =>
+      stat === 'ATK' ? b.base_atk - a.base_atk : b.base_hp - a.base_hp
+    );
+    // Build new 10-slot array: slot 0 = main, 1-9 = subs
+    const new_ids = Array(10).fill(null);
+    let pick_idx = 0;
+    for (let slot = 0; slot < 10; slot++) {
+      if (pick_idx < sorted.length) {
+        new_ids[slot] = sorted[pick_idx].id;
+        pick_idx++;
+      }
+      // else leave null (empty)
+    }
+    for (let i = 0; i < 10; i++) {
+      if (new_ids[i]) setGridWeapon(i, new_ids[i]);
+      else clearGridSlot(i);
+    }
+    setAutoModal(false);
+  };
+
+  // Totals for banner
+  const total_hp  = main_ids.reduce((s, id) => s + (getChar(id)?.base_hp  || 0), 0) + (grid_stats?.grid_hp  || 0);
+  const total_atk = main_ids.reduce((s, id) => s + (getChar(id)?.base_atk || 0), 0) + (grid_stats?.grid_atk || 0);
 
   return (
     <div style={{ height:'100dvh', display:'flex', flexDirection:'column', background:'var(--bg-void)', overflow:'hidden' }}>
 
-      {/* ── ZONE 1: MC BANNER ── */}
-      <MCBanner
+      {/* ── ZONE 1: HEADER — MC + 3 main chars in one row ── */}
+      <HeaderBanner
+        main_ids={main_ids}
+        getChar={getChar}
         total_hp={total_hp}
         total_atk={total_atk}
         main_element={main_weapon?.element}
         party_complete={main_ids.length === 3}
-        onBack={() => setScreen('lobby')}
+        selected_slot={selected_slot}
+        onHeaderSlotTap={onHeaderSlotTap}
+        onRemoveSlot={i => {
+          const n = [...Array(3)].map((_,j) => main_ids[j]||null);
+          n[i] = null;
+          setPartyCharacters(n.filter(Boolean));
+          if (selected_slot === i) setSelectedSlot(null);
+        }}
       />
 
       {/* ── ZONE 2: TAB BAR ── */}
       <TabBar active={active_tab} onChange={tab => {
         setActiveTab(tab);
-        setSlotPicker(null);
         setWeaponSlot(null);
+        setSelectedSlot(null);
+        setQcStaged(null);
       }} />
 
-      {/* ── ZONE 3: DYNAMIC CONTENT ── */}
-      <div style={{ flex:1, overflow:'hidden', position:'relative' }}>
-
+      {/* ── ZONE 3: CONTENT ── */}
+      <div style={{ flex:1, overflow:'hidden' }}>
         {active_tab === 'character' && (
           <CharacterTab
             main_ids={main_ids}
             getChar={getChar}
             catalog_characters={catalog_characters}
-            slot_picker={slot_picker}
-            detail_char={detail_char}
-            onSlotTap={i => setSlotPicker(slot_picker === i ? null : i)}
+            selected_slot={selected_slot}
             onToggleChar={toggleChar}
-            onDetailChar={c => setDetailChar(detail_char?.id === c.id ? null : c)}
-            onCloseDetail={() => setDetailChar(null)}
+            onClearSelection={clearSelection}
           />
         )}
-
         {active_tab === 'weapon' && (
           <WeaponTab
             grid_weapon_ids={grid_weapon_ids}
@@ -106,16 +178,17 @@ export function PartyPage() {
             weapon_slot={weapon_slot}
             filter_elem={filter_elem}
             grid_stats={grid_stats}
+            auto_modal={auto_modal}
             onSlotTap={slot => setWeaponSlot(weapon_slot === slot ? null : slot)}
             onAssignWeapon={assignWeapon}
-            onClearSlot={slot => { clearGridSlot(slot); setWeaponSlot(null); }}
+            onClearSlot={slot => { clearGridSlot(slot); }}
             onFilterElem={setFilterElem}
+            onOpenAutoModal={() => setAutoModal(true)}
+            onCloseAutoModal={() => setAutoModal(false)}
+            onAutoFill={autoFillWeapons}
           />
         )}
-
-        {active_tab === 'summon' && (
-          <SummonTab />
-        )}
+        {active_tab === 'summon' && <SummonTab />}
       </div>
 
       {/* ── BOTTOM NAV ── */}
@@ -129,92 +202,184 @@ export function PartyPage() {
   );
 }
 
-// ── MC BANNER ─────────────────────────────────────────────────────────────────
-function MCBanner({ total_hp, total_atk, main_element, party_complete, onBack }) {
+// ── HEADER BANNER — split 50/50: MC left, 3 ally slots right ────────────────
+function HeaderBanner({ main_ids, getChar, total_hp, total_atk, main_element, party_complete,
+                        selected_slot, onHeaderSlotTap, onRemoveSlot }) {
+  const is_swap_mode = selected_slot !== null;
+
   return (
     <div style={{
-      position:'relative', flexShrink:0,
-      background:'linear-gradient(135deg,#0a1828 0%,#0c1e38 50%,#080e1c 100%)',
+      flexShrink:0,
+      background:'linear-gradient(135deg,#071220 0%,#0b1a2e 60%,#060e1c 100%)',
       borderBottom:'1px solid var(--border-dim)',
-      overflow:'hidden', minHeight:130,
     }}>
-      {/* Decorative gradient sweep */}
-      <div style={{
-        position:'absolute', inset:0, opacity:0.4,
-        background:'radial-gradient(ellipse 70% 100% at 30% 50%, rgba(240,192,96,0.15) 0%, transparent 70%)',
-        pointerEvents:'none',
-      }} />
+      {/* Two-column split */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', minHeight:130 }}>
 
-      <div style={{ position:'relative', display:'flex', padding:'10px 14px', gap:12 }}>
-        {/* Left: MC portrait placeholder */}
+        {/* ── LEFT HALF: MC info ── */}
         <div style={{
-          width:88, height:110, flexShrink:0, borderRadius:10,
-          background:'linear-gradient(160deg,rgba(120,80,0,0.5),rgba(40,20,0,0.7))',
-          border:'1px solid var(--gold-dim)',
-          display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'flex-end',
-          padding:'6px 4px', overflow:'hidden', position:'relative',
+          borderRight:'1px solid var(--border-dim)',
+          padding:'10px 14px',
+          display:'flex', gap:12, alignItems:'center',
+          background:'linear-gradient(135deg,rgba(120,80,0,0.12) 0%,transparent 60%)',
         }}>
-          {/* MC art placeholder */}
-          <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', fontSize:'2.8rem', opacity:0.25 }}>⚔</div>
-          {/* Class icon */}
+          {/* MC portrait */}
           <div style={{
-            position:'absolute', top:6, left:6,
-            width:26, height:26, borderRadius:'50%',
-            background:'rgba(0,0,0,0.6)', border:'1px solid var(--gold-dim)',
-            display:'flex', alignItems:'center', justifyContent:'center', fontSize:'0.85rem',
-          }}>⚔</div>
-          <div style={{ fontSize:'0.55rem', color:'var(--gold-bright)', fontFamily:'var(--font-mono)', textAlign:'center', background:'rgba(0,0,0,0.6)', borderRadius:4, padding:'1px 4px', position:'relative', zIndex:1 }}>
-            Fighter
-          </div>
-          {/* Element badge */}
-          {main_element && (
-            <div style={{
-              position:'absolute', bottom:24, right:4,
-              fontSize:'0.9rem', filter:'drop-shadow(0 0 4px rgba(0,0,0,0.8))',
-            }}>
-              {ELEM_EMOJI[main_element]}
+            width:76, height:'100%', minHeight:100, flexShrink:0, borderRadius:10,
+            position:'relative', overflow:'hidden',
+            background:'linear-gradient(160deg,rgba(120,80,0,0.45),rgba(40,20,0,0.7))',
+            border:'1px solid var(--gold-dim)',
+            display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'flex-end',
+            padding:'0 4px 6px',
+          }}>
+            <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', fontSize:'2.6rem', opacity:0.18 }}>⚔</div>
+            {main_element && (
+              <div style={{ position:'absolute', top:6, right:6, fontSize:'0.9rem' }}>{ELEM_EMOJI[main_element]}</div>
+            )}
+            <div style={{ position:'relative', zIndex:1, fontSize:'0.5rem', color:'var(--gold-bright)', fontFamily:'var(--font-mono)',
+              background:'rgba(0,0,0,0.7)', borderRadius:4, padding:'1px 6px', textAlign:'center' }}>
+              Fighter
             </div>
-          )}
-        </div>
+          </div>
 
-        {/* Right: stats */}
-        <div style={{ flex:1, display:'flex', flexDirection:'column', gap:4 }}>
-          {/* Top row: slot label + switch */}
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-            <div>
-              <div style={{ fontSize:'0.72rem', color:'var(--text-gold)', fontFamily:'var(--font-display)', fontWeight:700 }}>
-                Sky-Wanderer
+          {/* MC stats */}
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontFamily:'var(--font-display)', fontSize:'0.85rem', fontWeight:700, color:'var(--text-gold)', marginBottom:1 }}>
+              Sky-Wanderer
+            </div>
+            <div style={{ fontSize:'0.58rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)', marginBottom:8 }}>
+              Fighter · Lvl 1
+            </div>
+            <div style={{ display:'flex', flexDirection:'column', gap:3 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                <span style={{ fontSize:'0.6rem', color:'#60cc60', fontFamily:'var(--font-mono)', width:28 }}>♦ HP</span>
+                <span style={{ fontSize:'0.88rem', color:'#60cc60', fontFamily:'var(--font-mono)', fontWeight:700 }}>
+                  {total_hp.toLocaleString()}
+                </span>
               </div>
-              <div style={{ fontSize:'0.6rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)' }}>
-                Fighter · Lvl 1
+              <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                <span style={{ fontSize:'0.6rem', color:'#ff9020', fontFamily:'var(--font-mono)', width:28 }}>✦ ATK</span>
+                <span style={{ fontSize:'0.88rem', color:'#ff9020', fontFamily:'var(--font-mono)', fontWeight:700 }}>
+                  {total_atk.toLocaleString()}
+                </span>
               </div>
             </div>
             {party_complete && (
-              <div style={{
-                fontSize:'0.62rem', color:'#60cc60', fontFamily:'var(--font-mono)',
-                background:'rgba(50,180,50,0.15)', border:'1px solid rgba(50,180,50,0.4)',
-                padding:'2px 8px', borderRadius:20, fontWeight:700,
-              }}>✓ Complete</div>
+              <div style={{ marginTop:8, fontSize:'0.58rem', color:'#60cc60', fontFamily:'var(--font-mono)', fontWeight:700,
+                background:'rgba(50,180,50,0.15)', border:'1px solid rgba(50,180,50,0.35)',
+                padding:'2px 8px', borderRadius:20, display:'inline-block' }}>✓ Complete</div>
+            )}
+          </div>
+        </div>
+
+        {/* ── RIGHT HALF: 3 main ally slots ── */}
+        <div style={{ padding:'10px 12px 10px 10px', display:'flex', flexDirection:'column', gap:0 }}>
+          {/* Label */}
+          <div style={{ fontSize:'0.55rem', color: is_swap_mode ? 'var(--charge-blue)' : 'var(--text-dim)',
+            fontFamily:'var(--font-mono)', letterSpacing:'0.06em', marginBottom:6,
+            display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+            <span>
+              {is_swap_mode
+                ? `SLOT ${selected_slot+1} SELECTED — tap another slot to swap positions`
+                : 'MAIN MEMBERS · tap to select & swap'}
+            </span>
+            {is_swap_mode && (
+              <button onClick={() => onHeaderSlotTap(selected_slot)}
+                style={{ fontSize:'0.55rem', color:'var(--text-dim)', background:'none', border:'none', cursor:'pointer', padding:'0 4px' }}>
+                ✕ cancel
+              </button>
             )}
           </div>
 
-          {/* Stats */}
-          <div style={{ display:'grid', gridTemplateColumns:'1fr', gap:3, marginTop:4 }}>
-            <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-              <span style={{ fontSize:'0.65rem', color:'#60cc60', fontFamily:'var(--font-mono)', width:36 }}>♦ HP</span>
-              <span style={{ fontSize:'1rem', color:'#60cc60', fontFamily:'var(--font-mono)', fontWeight:700 }}>
-                {total_hp.toLocaleString()}
-              </span>
-            </div>
-            <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-              <span style={{ fontSize:'0.65rem', color:'#ff9020', fontFamily:'var(--font-mono)', width:36 }}>✦ ATK</span>
-              <span style={{ fontSize:'1rem', color:'#ff9020', fontFamily:'var(--font-mono)', fontWeight:700 }}>
-                {total_atk.toLocaleString()}
-              </span>
-            </div>
-          </div>
+          {/* 3 slot cards in a row */}
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:6, flex:1 }}>
+            {[0,1,2].map(i => {
+              const char = getChar(main_ids[i]);
+              const is_selected = selected_slot === i;
+              const is_swap_target = is_swap_mode && selected_slot !== i;
+              const elem_rgb = char ? {
+                FIRE:'255,80,32', WATER:'48,180,255', EARTH:'136,204,68',
+                WIND:'160,255,176', LIGHT:'255,232,96', DARK:'192,96,255',
+              }[char.element] || '200,200,200' : null;
 
-          {/* Grid multipliers quick view */}
+              return (
+                <div key={i}
+                  onClick={() => onHeaderSlotTap(i)}
+                  style={{
+                    borderRadius:9, overflow:'hidden', position:'relative', cursor:'pointer',
+                    border:`1px solid ${is_selected ? 'var(--charge-blue)' : is_swap_target ? 'rgba(100,200,255,0.5)' : char ? 'var(--border-mid)' : 'var(--border-dim)'}`,
+                    background: is_selected
+                      ? 'rgba(32,96,200,0.25)'
+                      : is_swap_target
+                        ? 'rgba(32,96,200,0.12)'
+                        : char
+                          ? `linear-gradient(160deg,rgba(${elem_rgb},0.18) 0%,transparent 80%)`
+                          : 'rgba(255,255,255,0.02)',
+                    padding:'6px 8px',
+                    transition:'all 0.15s',
+                    boxShadow: is_selected ? '0 0 12px rgba(64,144,255,0.4)' : is_swap_target ? '0 0 8px rgba(64,144,255,0.2)' : 'none',
+                    display:'flex', flexDirection:'column', justifyContent:'space-between', minHeight:80,
+                  }}
+                >
+                  {char ? (
+                    <>
+                      {/* Top: rarity + remove */}
+                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
+                        <span style={{ fontSize:'0.48rem', fontFamily:'var(--font-mono)', fontWeight:700, color:'#ffcc00',
+                          background:'rgba(0,0,0,0.55)', padding:'1px 4px', borderRadius:3 }}>SSR</span>
+                        {!is_swap_mode && (
+                          <button style={{ fontSize:'0.48rem', color:'var(--hp-red)', background:'rgba(0,0,0,0.55)',
+                            border:'none', borderRadius:3, cursor:'pointer', padding:'1px 4px', lineHeight:1 }}
+                            onClick={e => { e.stopPropagation(); onRemoveSlot(i); }}>✕</button>
+                        )}
+                      </div>
+                      {/* Mid: name + type + element */}
+                      <div>
+                        <div style={{ fontSize:'0.65rem', fontFamily:'var(--font-display)', fontWeight:700, marginBottom:2, lineHeight:1.2 }}>{char.name}</div>
+                        <div style={{ display:'flex', gap:3, alignItems:'center', flexWrap:'wrap', marginBottom:3 }}>
+                          <span style={{ fontSize:'0.5rem', color:TYPE_COLOR[char.type], fontFamily:'var(--font-mono)', fontWeight:700 }}>{char.type}</span>
+                          <ElementBadge element={char.element} />
+                        </div>
+                        <div style={{ display:'flex', gap:6 }}>
+                          <span style={{ fontSize:'0.54rem', color:'#60cc60', fontFamily:'var(--font-mono)' }}>♦{char.base_hp.toLocaleString()}</span>
+                          <span style={{ fontSize:'0.54rem', color:'#ff9020', fontFamily:'var(--font-mono)' }}>✦{char.base_atk.toLocaleString()}</span>
+                        </div>
+                      </div>
+                      {/* Swap overlay when this is the target */}
+                      {is_swap_target && (
+                        <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center',
+                          background:'rgba(32,96,200,0.22)', borderRadius:8, pointerEvents:'none' }}>
+                          <span style={{ fontFamily:'var(--font-mono)', fontSize:'0.65rem', color:'var(--charge-blue)', fontWeight:700 }}>
+                            ⇄ swap
+                          </span>
+                        </div>
+                      )}
+                      {/* Selected indicator */}
+                      {is_selected && (
+                        <div style={{ position:'absolute', bottom:4, right:5, fontSize:'0.5rem',
+                          color:'var(--charge-blue)', fontFamily:'var(--font-mono)', fontWeight:700 }}>
+                          selected
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div style={{ height:'100%', display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:3 }}>
+                      {is_swap_target ? (
+                        <span style={{ fontFamily:'var(--font-mono)', fontSize:'0.65rem', color:'var(--charge-blue)', fontWeight:700 }}>→ move here</span>
+                      ) : (
+                        <>
+                          <span style={{ fontSize:'1rem', opacity:0.2 }}>+</span>
+                          <span style={{ fontSize:'0.52rem', color: is_selected?'var(--charge-blue)':'var(--text-dim)', fontFamily:'var(--font-mono)' }}>
+                            {is_selected ? 'pick from roster' : 'Empty'}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
     </div>
@@ -229,25 +394,19 @@ function TabBar({ active, onChange }) {
     { id:'summon',    icon:'💎', label:'Summon'    },
   ];
   return (
-    <div style={{
-      display:'flex', background:'var(--bg-panel)',
-      borderBottom:'1px solid var(--border-dim)', flexShrink:0,
-    }}>
-      {tabs.map(tab => {
-        const is_active = active === tab.id;
+    <div style={{ display:'flex', background:'var(--bg-panel)', borderBottom:'1px solid var(--border-dim)', flexShrink:0 }}>
+      {tabs.map(t => {
+        const on = active === t.id;
         return (
-          <button key={tab.id} onClick={() => onChange(tab.id)} style={{
-            flex:1, padding:'10px 8px', border:'none', cursor:'pointer',
-            background: is_active ? 'rgba(32,96,200,0.15)' : 'transparent',
-            borderBottom: `2px solid ${is_active ? 'var(--charge-blue)' : 'transparent'}`,
-            display:'flex', flexDirection:'column', alignItems:'center', gap:3,
-            transition:'all 0.15s',
+          <button key={t.id} onClick={() => onChange(t.id)} style={{
+            flex:1, padding:'9px 8px', border:'none', cursor:'pointer',
+            background: on ? 'rgba(32,96,200,0.15)' : 'transparent',
+            borderBottom:`2px solid ${on?'var(--charge-blue)':'transparent'}`,
+            display:'flex', flexDirection:'column', alignItems:'center', gap:2, transition:'all 0.15s',
           }}>
-            <span style={{ fontSize:'1.1rem' }}>{tab.icon}</span>
-            <span style={{
-              fontFamily:'var(--font-display)', fontSize:'0.68rem', fontWeight:700,
-              letterSpacing:'0.04em', color: is_active ? 'var(--text-bright)' : 'var(--text-dim)',
-            }}>{tab.label}</span>
+            <span style={{ fontSize:'1rem' }}>{t.icon}</span>
+            <span style={{ fontFamily:'var(--font-display)', fontSize:'0.66rem', fontWeight:700, letterSpacing:'0.04em',
+              color: on ? 'var(--text-bright)' : 'var(--text-dim)' }}>{t.label}</span>
           </button>
         );
       })}
@@ -256,86 +415,291 @@ function TabBar({ active, onChange }) {
 }
 
 // ── TAB A: CHARACTER ──────────────────────────────────────────────────────────
-function CharacterTab({ main_ids, getChar, catalog_characters, slot_picker, detail_char, onSlotTap, onToggleChar, onDetailChar, onCloseDetail }) {
+function CharacterTab({ main_ids, getChar, catalog_characters, selected_slot, onToggleChar, onClearSelection }) {
+  const slot_pick_mode = selected_slot !== null;
   return (
-    <div style={{ height:'100%', display:'flex', flexDirection:'column', overflow:'hidden' }}>
+    <div style={{ height:'100%', overflowY:'auto', padding:'12px 14px' }}>
+      {/* Roster label */}
+      <div style={{ fontSize:'0.62rem', color: slot_pick_mode ? 'var(--charge-blue)' : 'var(--text-dim)',
+        fontFamily:'var(--font-mono)', letterSpacing:'0.06em', marginBottom:10,
+        display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+        <span>
+          {slot_pick_mode
+            ? `SLOT ${selected_slot+1} — tap a character to place in this slot`
+            : 'CHARACTER ROSTER · tap a card to add/remove · tap a header slot first to swap'
+          }
+        </span>
+        {slot_pick_mode && (
+          <button onClick={onClearSelection}
+            style={{ fontSize:'0.58rem', color:'var(--text-dim)', background:'none', border:'none', cursor:'pointer' }}>
+            cancel
+          </button>
+        )}
+      </div>
 
-      {/* Party slots + roster scroll together */}
-      <div style={{ flex:1, overflowY:'auto', padding:'12px 14px' }}>
+      {/* Horizontal scrolling roster of cards */}
+      <div style={{ display:'flex', gap:10, overflowX:'auto', paddingBottom:8 }}>
+        {catalog_characters.map(char => {
+          const in_party   = main_ids.includes(char.id);
+          const full       = main_ids.length >= 3 && !in_party;
+          const disabled   = !slot_pick_mode && full;
+          return (
+            <RosterCard
+              key={char.id}
+              char={char}
+              in_party={in_party}
+              disabled={disabled}
+              slot_pick_mode={slot_pick_mode}
+              selected_slot={selected_slot}
+              onToggle={() => onToggleChar(char.id)}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
-        {/* MAIN MEMBERS label */}
-        <div style={{ textAlign:'center', marginBottom:10 }}>
-          <span style={{
-            display:'inline-block', padding:'3px 20px',
-            background:'linear-gradient(90deg,transparent,rgba(240,192,96,0.12),transparent)',
-            borderTop:'1px solid var(--gold-dim)', borderBottom:'1px solid var(--gold-dim)',
-            fontSize:'0.62rem', color:'var(--gold-bright)', fontFamily:'var(--font-mono)', letterSpacing:'0.12em',
-          }}>MAIN MEMBERS</span>
+function RosterCard({ char, in_party, disabled, slot_pick_mode, selected_slot, onToggle }) {
+  const elem_color = {
+    FIRE:'255,80,32', WATER:'48,180,255', EARTH:'136,204,68',
+    WIND:'160,255,176', LIGHT:'255,232,96', DARK:'192,96,255',
+  }[char.element] || '200,200,200';
+
+  return (
+    <div style={{
+      width:280, flexShrink:0, borderRadius:12, overflow:'hidden',
+      background:'var(--bg-panel)',
+      border:`1px solid ${in_party ? 'var(--border-bright)' : 'var(--border-dim)'}`,
+      opacity: disabled ? 0.45 : 1,
+      boxShadow: in_party ? '0 0 14px rgba(64,144,255,0.18)' : 'none',
+      transition:'all 0.15s',
+    }}>
+      {/* Card header */}
+      <div style={{
+        padding:'10px 12px 8px',
+        background:`linear-gradient(135deg,rgba(${elem_color},0.15) 0%,transparent 70%)`,
+        borderBottom:'1px solid var(--border-dim)',
+        display:'flex', gap:10, alignItems:'flex-start',
+      }}>
+        {/* Portrait */}
+        <div style={{
+          width:48, height:48, flexShrink:0, borderRadius:9,
+          background:`rgba(${elem_color},0.2)`, border:'1px solid rgba(255,255,255,0.08)',
+          display:'flex', alignItems:'center', justifyContent:'center', fontSize:'1.6rem',
+        }}>{TYPE_ICON[char.type]}</div>
+
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:2 }}>
+            <div>
+              <div style={{ fontFamily:'var(--font-display)', fontSize:'0.92rem', fontWeight:700 }}>{char.name}</div>
+              <div style={{ fontSize:'0.65rem', color:'var(--text-dim)', fontStyle:'italic' }}>{char.title}</div>
+            </div>
+            <span style={{ fontSize:'0.55rem', fontFamily:'var(--font-mono)', fontWeight:700, color:'#ffcc00',
+              background:'rgba(0,0,0,0.5)', padding:'1px 5px', borderRadius:3 }}>SSR</span>
+          </div>
+          <div style={{ display:'flex', gap:6, alignItems:'center', marginBottom:3 }}>
+            <ElementBadge element={char.element} />
+            <span style={{ fontSize:'0.62rem', color:TYPE_COLOR[char.type], fontFamily:'var(--font-mono)', fontWeight:700 }}>{char.type}</span>
+          </div>
+          <div style={{ display:'flex', gap:10, fontSize:'0.62rem', fontFamily:'var(--font-mono)' }}>
+            <span style={{ color:'#60cc60' }}>♦ {char.base_hp.toLocaleString()}</span>
+            <span style={{ color:'#ff9020' }}>✦ {char.base_atk.toLocaleString()}</span>
+            <span style={{ color:'var(--charge-blue)' }}>+{char.charge_gain_per_turn}/t</span>
+          </div>
         </div>
+      </div>
 
-        {/* 3 main slots */}
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8, marginBottom:14 }}>
-          {[0,1,2].map(i => {
-            const char = getChar(main_ids[i]);
-            const is_open = slot_picker === i;
-            return (
-              <PartySlotCard
-                key={i}
-                index={i}
-                char={char}
-                is_open={is_open}
-                onTap={() => onSlotTap(i)}
-              />
-            );
-          })}
-        </div>
-
-        {/* SUB MEMBERS — future */}
-        <div style={{ textAlign:'center', marginBottom:8 }}>
-          <span style={{
-            display:'inline-block', padding:'3px 20px',
-            background:'linear-gradient(90deg,transparent,rgba(100,100,100,0.08),transparent)',
-            borderTop:'1px solid var(--border-dim)', borderBottom:'1px solid var(--border-dim)',
-            fontSize:'0.62rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)', letterSpacing:'0.12em',
-          }}>SUB MEMBERS · v2.0</span>
-        </div>
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(2,1fr)', gap:8, marginBottom:18, opacity:0.4 }}>
-          {[0,1].map(i => (
-            <div key={i} style={{
-              border:'1px dashed var(--border-dim)', borderRadius:10,
-              padding:12, minHeight:70, display:'flex', alignItems:'center', justifyContent:'center',
-            }}>
-              <span style={{ fontSize:'0.65rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)' }}>Sub Slot {i+1}</span>
+      {/* Skills — always expanded, no toggle */}
+      <div style={{ padding:'10px 12px', borderBottom:'1px solid var(--border-dim)' }}>
+        <div style={{ fontSize:'0.58rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)', letterSpacing:'0.05em', marginBottom:7 }}>SKILLS</div>
+        <div style={{ display:'flex', flexDirection:'column', gap:7 }}>
+          {char.abilities.map(a => (
+            <div key={a.id}>
+              <div style={{ display:'flex', justifyContent:'space-between', marginBottom:2 }}>
+                <span style={{ fontFamily:'var(--font-mono)', fontSize:'0.72rem', fontWeight:700, color:'var(--text-bright)' }}>{a.name}</span>
+                <span style={{ fontSize:'0.6rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)' }}>CD {a.cooldown_max}t</span>
+              </div>
+              <div style={{ fontSize:'0.67rem', color:'var(--text-dim)', lineHeight:1.45 }}>{a.description}</div>
             </div>
           ))}
         </div>
+      </div>
 
-        {/* ROSTER */}
-        <div style={{ marginBottom:8 }}>
-          <div style={{ fontSize:'0.62rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)', letterSpacing:'0.06em', marginBottom:8 }}>
-            CHARACTER ROSTER
-            {slot_picker !== null && (
-              <span style={{ color:'var(--gold-bright)', marginLeft:8 }}>
-                ▶ Tap to assign to Slot {slot_picker + 1}
-              </span>
-            )}
+      {/* Charge attack */}
+      <div style={{ padding:'8px 12px', borderBottom:'1px solid var(--border-dim)', background:'rgba(240,192,96,0.04)' }}>
+        <div style={{ fontSize:'0.58rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)', marginBottom:4, letterSpacing:'0.05em' }}>CHARGE ATTACK</div>
+        <div style={{ fontFamily:'var(--font-display)', fontSize:'0.72rem', fontWeight:700, color:'var(--text-gold)', marginBottom:2 }}>{char.charge_attack.name}</div>
+        <div style={{ fontSize:'0.67rem', color:'var(--text-dim)', lineHeight:1.45 }}>{char.charge_attack.description}</div>
+      </div>
+
+      {/* Action button */}
+      <div style={{ padding:'8px 10px' }}>
+        {slot_pick_mode ? (
+          <button
+            className="btn btn-primary"
+            style={{ width:'100%', fontSize:'0.72rem', padding:'7px',
+              background: in_party ? 'linear-gradient(135deg,#3a1a00,#6a3200)' : undefined }}
+            onClick={onToggle}
+          >
+            {in_party ? `Move to Slot ${selected_slot+1}` : `→ Place in Slot ${selected_slot+1}`}
+          </button>
+        ) : in_party ? (
+          <button className="btn btn-danger" style={{ width:'100%', fontSize:'0.72rem', padding:'7px' }}
+            onClick={onToggle}>Remove from Party</button>
+        ) : (
+          <button className="btn btn-primary" style={{ width:'100%', fontSize:'0.72rem', padding:'7px' }}
+            disabled={disabled} onClick={onToggle}>Add to Party</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── TAB B: WEAPON ─────────────────────────────────────────────────────────────
+function WeaponTab({ grid_weapon_ids, getWeapon, catalog_weapons, weapon_slot, filter_elem,
+                     grid_stats, auto_modal, onSlotTap, onAssignWeapon, onClearSlot,
+                     onFilterElem, onOpenAutoModal, onCloseAutoModal, onAutoFill }) {
+  const main_weapon = getWeapon(grid_weapon_ids[0]);
+  const filtered    = catalog_weapons.filter(w => filter_elem === 'ALL' || w.element === filter_elem);
+
+  return (
+    <div style={{ height:'100%', display:'flex', flexDirection:'column', overflow:'hidden', position:'relative' }}>
+
+      {/* Auto Select modal overlay */}
+      {auto_modal && (
+        <AutoSelectModal
+          onConfirm={onAutoFill}
+          onClose={onCloseAutoModal}
+        />
+      )}
+
+      {/* Stats bar */}
+      {grid_stats && (
+        <div style={{ background:'var(--bg-deep)', borderBottom:'1px solid var(--border-dim)',
+          padding:'7px 14px', display:'flex', gap:20, alignItems:'center', flexShrink:0 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:5 }}>
+            <span style={{ fontSize:'0.62rem', color:'#60cc60', fontFamily:'var(--font-mono)' }}>♦ Total HP</span>
+            <span style={{ fontSize:'0.95rem', color:'#60cc60', fontFamily:'var(--font-mono)', fontWeight:700 }}>{grid_stats.grid_hp.toLocaleString()}</span>
           </div>
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))', gap:10 }}>
-            {catalog_characters.map(char => {
-              const selected = main_ids.includes(char.id);
-              const full     = main_ids.length >= 3 && !selected;
-              const expanded = detail_char?.id === char.id;
+          <div style={{ display:'flex', alignItems:'center', gap:5 }}>
+            <span style={{ fontSize:'0.62rem', color:'#ff9020', fontFamily:'var(--font-mono)' }}>✦ Total ATK</span>
+            <span style={{ fontSize:'0.95rem', color:'#ff9020', fontFamily:'var(--font-mono)', fontWeight:700 }}>{grid_stats.grid_atk.toLocaleString()}</span>
+          </div>
+          <div style={{ marginLeft:'auto', display:'flex', gap:10, alignItems:'center' }}>
+            {[['N×',grid_stats.normal_mult.toFixed(2),'var(--text-bright)'],['Ω×',grid_stats.omega_mult.toFixed(2),'var(--charge-blue)'],['EX×',grid_stats.ex_mult.toFixed(2),'var(--text-gold)']].map(([l,v,c]) => (
+              <div key={l} style={{ textAlign:'center' }}>
+                <div style={{ fontSize:'0.52rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)' }}>{l}</div>
+                <div style={{ fontSize:'0.78rem', color:c, fontFamily:'var(--font-mono)', fontWeight:700 }}>{v}</div>
+              </div>
+            ))}
+            {/* Auto Select button */}
+            <button className="btn btn-gold btn-sm"
+              style={{ marginLeft:10, padding:'4px 12px', fontSize:'0.65rem' }}
+              onClick={onOpenAutoModal}>
+              ⚡ Auto Select
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Main area: weapon grid + always-visible inventory panel */}
+      <div style={{ flex:1, overflow:'hidden', display:'flex' }}>
+
+        {/* Left: weapon grid — scrollable */}
+        <div style={{ flex:1, overflowY:'auto', padding:'12px 14px', display:'flex', flexDirection:'column', gap:10, minWidth:0 }}>
+
+          {/* Main weapon */}
+          <div>
+            <div style={{ fontSize:'0.6rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)', letterSpacing:'0.06em', marginBottom:6 }}>
+              MAIN WEAPON · sets MC element &amp; charge attack
+            </div>
+            <MainWeaponSlot weapon={main_weapon} selected={weapon_slot===0}
+              onTap={() => onSlotTap(0)} onClear={() => onClearSlot(0)} />
+          </div>
+
+          {/* 3×3 sub grid */}
+          <div>
+            <div style={{ fontSize:'0.6rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)', letterSpacing:'0.06em', marginBottom:6 }}>
+              SUB WEAPONS · all skills always active
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:7 }}>
+              {[1,2,3,4,5,6,7,8,9].map(slot => (
+                <SubWeaponSlot key={slot} slot={slot}
+                  weapon={getWeapon(grid_weapon_ids[slot])}
+                  selected={weapon_slot===slot}
+                  onTap={() => onSlotTap(slot)}
+                  onClear={() => onClearSlot(slot)} />
+              ))}
+            </div>
+          </div>
+
+          {/* Grid stats */}
+          {grid_stats && (
+            <div className="panel" style={{ padding:12 }}>
+              <div style={{ fontSize:'0.6rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)', letterSpacing:'0.06em', marginBottom:8 }}>GRID STATS</div>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:5, marginBottom:7 }}>
+                {[['Normal ×',grid_stats.normal_mult.toFixed(3),'var(--text-bright)'],['Omega ×',grid_stats.omega_mult.toFixed(3),'var(--charge-blue)'],['EX ×',grid_stats.ex_mult.toFixed(3),'var(--text-gold)']].map(([l,v,c]) => (
+                  <div key={l} style={{ background:'var(--bg-deep)', border:'1px solid var(--border-mid)', borderRadius:7, padding:'7px 8px', textAlign:'center' }}>
+                    <div style={{ fontSize:'0.55rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)', marginBottom:2 }}>{l}</div>
+                    <div style={{ fontFamily:'var(--font-mono)', fontSize:'0.9rem', fontWeight:700, color:c }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:5, marginBottom:8 }}>
+                {[['ATK',grid_stats.grid_atk?.toLocaleString()],['HP',grid_stats.grid_hp?.toLocaleString()],['Crit',(grid_stats.crit_rate*100).toFixed(1)+'%'],['Spd',grid_stats.charge_speed_bonus?(grid_stats.charge_speed_bonus*100).toFixed(0)+'%':'0%']].map(([l,v]) => (
+                  <div key={l} style={{ background:'var(--bg-deep)', border:'1px solid var(--border-dim)', borderRadius:6, padding:'6px 7px' }}>
+                    <div style={{ fontSize:'0.52rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)', marginBottom:2 }}>{l}</div>
+                    <div style={{ fontFamily:'var(--font-mono)', fontSize:'0.78rem', color:'var(--text-bright)', fontWeight:700 }}>{v||'—'}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize:'0.57rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)', lineHeight:1.5 }}>
+                DMG = ATK × {grid_stats.normal_mult.toFixed(2)} × {grid_stats.omega_mult.toFixed(2)} × {grid_stats.ex_mult.toFixed(2)} × Elem × Crit − DEF
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Right: ALWAYS-VISIBLE inventory panel (pinned) */}
+        <div style={{
+          width:300, flexShrink:0,
+          borderLeft:'1px solid var(--border-dim)',
+          display:'flex', flexDirection:'column', overflow:'hidden',
+          background:'var(--bg-panel)',
+        }}>
+          {/* Picker header */}
+          <div style={{ padding:'10px 12px', borderBottom:'1px solid var(--border-dim)', flexShrink:0 }}>
+            <div style={{ fontSize:'0.65rem', fontFamily:'var(--font-mono)', fontWeight:700, marginBottom:8,
+              color: weapon_slot !== null ? 'var(--gold-bright)' : 'var(--text-dim)' }}>
+              {weapon_slot !== null
+                ? `▶ Slot ${weapon_slot}${weapon_slot===0?' (Main)':''} — tap weapon to assign`
+                : 'WEAPON INVENTORY · select a slot first'
+              }
+            </div>
+            {/* Element filters */}
+            <div style={{ display:'flex', gap:3, flexWrap:'wrap' }}>
+              {['ALL','FIRE','WATER','EARTH','WIND','LIGHT','DARK'].map(e => (
+                <button key={e} className="btn btn-ghost btn-sm"
+                  style={{ padding:'3px 7px', fontSize:'0.58rem',
+                    borderColor: filter_elem===e?'var(--border-bright)':undefined,
+                    color: filter_elem===e?'var(--text-bright)':undefined,
+                    background: filter_elem===e?'rgba(32,96,200,0.12)':undefined,
+                  }}
+                  onClick={() => onFilterElem(e)}
+                >{e}</button>
+              ))}
+            </div>
+          </div>
+          {/* Weapon list — always visible */}
+          <div style={{ flex:1, overflowY:'auto', padding:'8px 10px', display:'flex', flexDirection:'column', gap:5 }}>
+            {filtered.map(w => {
+              const in_grid   = grid_weapon_ids.includes(w.id);
+              const clickable = weapon_slot !== null && !in_grid;
               return (
-                <RosterCard
-                  key={char.id}
-                  char={char}
-                  selected={selected}
-                  disabled={full && slot_picker === null}
-                  expanded={expanded}
-                  slot_picker={slot_picker}
-                  onToggle={() => onToggleChar(char.id)}
-                  onExpand={() => onDetailChar(char)}
-                />
+                <WeaponPickerCard key={w.id} weapon={w} in_grid={in_grid}
+                  clickable={clickable}
+                  onPick={() => clickable && onAssignWeapon(w.id)} />
               );
             })}
           </div>
@@ -345,371 +709,132 @@ function CharacterTab({ main_ids, getChar, catalog_characters, slot_picker, deta
   );
 }
 
-function PartySlotCard({ index, char, is_open, onTap }) {
-  const hp_pct = char ? (char.base_hp / 20000) : 0;
-  return (
-    <div
-      onClick={onTap}
-      style={{
-        background: char ? 'var(--bg-card)' : 'rgba(255,255,255,0.02)',
-        border: `1px solid ${is_open ? 'var(--border-bright)' : char ? 'var(--border-mid)' : 'var(--border-dim)'}`,
-        borderRadius:10, cursor:'pointer', transition:'all 0.15s', overflow:'hidden',
-        boxShadow: is_open ? '0 0 16px rgba(100,160,255,0.3)' : 'none',
-        minHeight:140,
-      }}
-    >
-      {char ? (
-        <>
-          {/* Portrait placeholder with element colour wash */}
-          <div style={{
-            height:80, display:'flex', alignItems:'center', justifyContent:'center',
-            background:`linear-gradient(160deg,rgba(${char.element==='FIRE'?'255,80,32':char.element==='WATER'?'48,180,255':char.element==='EARTH'?'136,204,68':char.element==='WIND'?'160,255,176':char.element==='LIGHT'?'255,232,96':'192,96,255'},0.18) 0%,transparent 100%)`,
-            position:'relative',
-          }}>
-            {/* SSR badge */}
-            <div style={{
-              position:'absolute', top:5, right:5,
-              fontSize:'0.58rem', fontFamily:'var(--font-mono)', fontWeight:700, color:'#ffcc00',
-              background:'rgba(0,0,0,0.6)', padding:'1px 5px', borderRadius:3,
-            }}>SSR</div>
-            {/* Role icon */}
-            <div style={{ fontSize:'2rem' }}>{TYPE_ICON[char.type]}</div>
-          </div>
+// ── AUTO SELECT MODAL ─────────────────────────────────────────────────────────
+function AutoSelectModal({ onConfirm, onClose }) {
+  const [stat, setStat]     = useState('ATK');
+  const [element, setElem]  = useState('ALL');
+  const ELEMENTS = ['ALL','FIRE','WATER','EARTH','WIND','LIGHT','DARK'];
+  const ELEM_CLR = { FIRE:'var(--fire)', WATER:'var(--water)', EARTH:'var(--earth)',
+    WIND:'var(--wind)', LIGHT:'var(--light)', DARK:'var(--dark)', ALL:'var(--text-mid)' };
 
-          <div style={{ padding:'8px 10px' }}>
-            {/* Role label */}
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:3 }}>
-              <span style={{ fontSize:'0.6rem', color:TYPE_COLOR[char.type], fontFamily:'var(--font-mono)', fontWeight:700 }}>
-                {char.type}
-              </span>
-              <ElementBadge element={char.element} />
-            </div>
-            <div style={{ fontFamily:'var(--font-display)', fontSize:'0.82rem', fontWeight:700, marginBottom:4 }}>
-              {char.name}
-            </div>
-            <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
-              <div style={{ fontSize:'0.65rem', fontFamily:'var(--font-mono)', color:'#60cc60' }}>
-                ♦ {char.base_hp.toLocaleString()}
-              </div>
-              <div style={{ fontSize:'0.65rem', fontFamily:'var(--font-mono)', color:'#ff9020' }}>
-                ✦ {char.base_atk.toLocaleString()}
-              </div>
-            </div>
-          </div>
-        </>
-      ) : (
-        <div style={{ height:'100%', minHeight:140, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:6 }}>
-          <div style={{ fontSize:'1.6rem', opacity:0.2 }}>+</div>
-          <div style={{ fontSize:'0.62rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)' }}>
-            {is_open ? 'Pick from roster' : `Slot ${index + 1}`}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function RosterCard({ char, selected, disabled, expanded, slot_picker, onToggle, onExpand }) {
   return (
     <div style={{
-      background:'var(--bg-panel)', borderRadius:10,
-      border:`1px solid ${selected ? 'var(--border-bright)' : 'var(--border-dim)'}`,
-      opacity: disabled ? 0.5 : 1,
-      boxShadow: selected ? '0 0 16px rgba(64,144,255,0.18)' : 'none',
-      transition:'all 0.15s', overflow:'hidden',
-    }}>
-      {/* Card header row */}
-      <div style={{ display:'flex', gap:10, padding:'10px 12px', alignItems:'flex-start' }}>
-        {/* Mini portrait */}
-        <div style={{
-          width:44, height:44, flexShrink:0, borderRadius:8,
-          background:`linear-gradient(135deg,rgba(${char.element==='FIRE'?'255,80,32':char.element==='WATER'?'48,180,255':char.element==='EARTH'?'136,204,68':char.element==='WIND'?'160,255,176':'200,200,200'},0.25),transparent)`,
-          border:'1px solid var(--border-dim)',
-          display:'flex', alignItems:'center', justifyContent:'center', fontSize:'1.5rem', flexShrink:0,
-        }}>{TYPE_ICON[char.type]}</div>
+      position:'absolute', inset:0, zIndex:50,
+      background:'rgba(4,8,18,0.82)',
+      display:'flex', alignItems:'center', justifyContent:'center',
+    }} onClick={onClose}>
+      <div className="panel" style={{ width:320, padding:24 }}
+        onClick={e => e.stopPropagation()}>
 
-        <div style={{ flex:1, minWidth:0 }}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:2 }}>
-            <span style={{ fontFamily:'var(--font-display)', fontSize:'0.9rem', fontWeight:700 }}>{char.name}</span>
-            <span style={{ fontSize:'0.65rem', color:'var(--text-dim)', fontStyle:'italic' }}>{char.title}</span>
-          </div>
-          <div style={{ display:'flex', gap:6, alignItems:'center', marginBottom:4 }}>
-            <ElementBadge element={char.element} />
-            <span style={{ fontSize:'0.65rem', color:TYPE_COLOR[char.type], fontFamily:'var(--font-mono)', fontWeight:700 }}>{char.type}</span>
-          </div>
-          <div style={{ display:'flex', gap:12, fontSize:'0.65rem', fontFamily:'var(--font-mono)' }}>
-            <span style={{ color:'#60cc60' }}>♦ {char.base_hp.toLocaleString()}</span>
-            <span style={{ color:'#ff9020' }}>✦ {char.base_atk.toLocaleString()}</span>
-            <span style={{ color:'var(--charge-blue)' }}>+{char.charge_gain_per_turn}/t</span>
-          </div>
+        <div style={{ fontFamily:'var(--font-display)', fontSize:'1rem', fontWeight:700,
+          color:'var(--text-gold)', marginBottom:4 }}>⚡ Auto Select</div>
+        <div style={{ fontSize:'0.7rem', color:'var(--text-dim)', marginBottom:18, lineHeight:1.5 }}>
+          Auto-fills all 10 weapon slots with the best matching weapons from your inventory.
+          Slots with no matching weapons are left empty.
         </div>
-      </div>
 
-      {/* Ability tags */}
-      <div style={{ padding:'0 12px 8px', display:'flex', gap:4, flexWrap:'wrap' }}>
-        {char.abilities.map(a => (
-          <span key={a.id} style={{
-            fontSize:'0.6rem', fontFamily:'var(--font-mono)',
-            padding:'2px 8px', borderRadius:20,
-            background:'rgba(255,255,255,0.05)', border:'1px solid var(--border-dim)',
-            color:'var(--text-mid)',
-          }}>{a.name}</span>
-        ))}
-      </div>
-
-      {/* Expanded detail */}
-      {expanded && (
-        <div style={{ padding:'8px 12px 12px', borderTop:'1px solid var(--border-dim)', background:'rgba(0,0,0,0.2)' }}>
-          {char.abilities.map(a => (
-            <div key={a.id} style={{ marginBottom:8 }}>
-              <div style={{ display:'flex', justifyContent:'space-between', marginBottom:2 }}>
-                <span style={{ fontFamily:'var(--font-mono)', fontSize:'0.75rem', fontWeight:700, color:'var(--text-bright)' }}>{a.name}</span>
-                <span style={{ fontSize:'0.62rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)' }}>CD {a.cooldown_max}t</span>
-              </div>
-              <div style={{ fontSize:'0.7rem', color:'var(--text-dim)', lineHeight:1.5 }}>{a.description}</div>
-            </div>
-          ))}
-          <div style={{ borderTop:'1px solid var(--border-dim)', paddingTop:8, marginTop:4 }}>
-            <div style={{ fontFamily:'var(--font-display)', fontSize:'0.72rem', color:'var(--text-gold)', marginBottom:2 }}>
-              CA: {char.charge_attack.name}
-            </div>
-            <div style={{ fontSize:'0.68rem', color:'var(--text-dim)', lineHeight:1.5 }}>{char.charge_attack.description}</div>
-          </div>
-        </div>
-      )}
-
-      {/* Bottom actions */}
-      <div style={{ padding:'0 10px 10px', display:'flex', gap:6 }}>
-        {selected ? (
-          <button className="btn btn-danger btn-sm" style={{ flex:1 }}
-            onClick={e => { e.stopPropagation(); onToggle(); }}>
-            Remove
-          </button>
-        ) : (
-          <button className="btn btn-primary btn-sm" style={{ flex:1 }}
-            disabled={disabled}
-            onClick={e => { e.stopPropagation(); if (!disabled) onToggle(); }}>
-            {slot_picker !== null ? `→ Slot ${slot_picker + 1}` : 'Add'}
-          </button>
-        )}
-        <button className="btn btn-ghost btn-sm" style={{ padding:'6px 10px' }}
-          onClick={e => { e.stopPropagation(); onExpand(); }}>
-          {expanded ? '▲' : '▼'}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ── TAB B: WEAPON ─────────────────────────────────────────────────────────────
-function WeaponTab({ grid_weapon_ids, getWeapon, catalog_weapons, weapon_slot, filter_elem, grid_stats, onSlotTap, onAssignWeapon, onClearSlot, onFilterElem }) {
-  const main_weapon = getWeapon(grid_weapon_ids[0]);
-  const filtered    = catalog_weapons.filter(w => filter_elem === 'ALL' || w.element === filter_elem);
-
-  return (
-    <div style={{ height:'100%', display:'flex', flexDirection:'column', overflow:'hidden' }}>
-
-      {/* Total HP/ATK bar */}
-      {grid_stats && (
-        <div style={{
-          background:'var(--bg-deep)', borderBottom:'1px solid var(--border-dim)',
-          padding:'8px 14px', display:'flex', gap:20, flexShrink:0,
-        }}>
-          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-            <span style={{ fontSize:'0.65rem', color:'#60cc60', fontFamily:'var(--font-mono)' }}>♦ Total HP</span>
-            <span style={{ fontSize:'1rem', color:'#60cc60', fontFamily:'var(--font-mono)', fontWeight:700 }}>
-              {grid_stats.grid_hp.toLocaleString()}
-            </span>
-          </div>
-          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-            <span style={{ fontSize:'0.65rem', color:'#ff9020', fontFamily:'var(--font-mono)' }}>✦ Total ATK</span>
-            <span style={{ fontSize:'1rem', color:'#ff9020', fontFamily:'var(--font-mono)', fontWeight:700 }}>
-              {grid_stats.grid_atk.toLocaleString()}
-            </span>
-          </div>
-          <div style={{ marginLeft:'auto', display:'flex', gap:8, alignItems:'center' }}>
-            {[
-              ['N×', grid_stats.normal_mult.toFixed(2),'var(--text-bright)'],
-              ['Ω×', grid_stats.omega_mult.toFixed(2), 'var(--charge-blue)'],
-              ['EX×', grid_stats.ex_mult.toFixed(2),  'var(--text-gold)'],
-            ].map(([l,v,c]) => (
-              <div key={l} style={{ textAlign:'center' }}>
-                <div style={{ fontSize:'0.55rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)' }}>{l}</div>
-                <div style={{ fontSize:'0.78rem', color:c, fontFamily:'var(--font-mono)', fontWeight:700 }}>{v}</div>
-              </div>
+        {/* Stat priority */}
+        <div style={{ marginBottom:16 }}>
+          <div style={{ fontSize:'0.62rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)',
+            letterSpacing:'0.06em', marginBottom:8 }}>PRIORITISE STAT</div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+            {['ATK','HP'].map(s => (
+              <button key={s}
+                className={stat===s ? 'btn btn-primary' : 'btn btn-ghost'}
+                style={{ padding:'10px', fontSize:'0.8rem', fontWeight:700 }}
+                onClick={() => setStat(s)}>
+                {s==='ATK' ? '✦ Attack' : '♦ HP'}
+              </button>
             ))}
           </div>
         </div>
-      )}
 
-      {/* Main body: weapon grid + picker side by side on desktop, stacked on mobile */}
-      <div style={{ flex:1, overflow:'hidden', display:'flex', flexDirection:'column' }}>
-        <div style={{ flex:1, overflow:'hidden', display:'grid', gridTemplateColumns: weapon_slot !== null ? '1fr 1fr' : '1fr', transition:'all 0.2s' }}>
-
-          {/* Weapon grid */}
-          <div style={{ overflowY:'auto', padding:'12px 14px', display:'flex', flexDirection:'column', gap:10 }}>
-
-            {/* Main weapon slot — tall, prominent */}
-            <div>
-              <div style={{ fontSize:'0.6rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)', letterSpacing:'0.06em', marginBottom:6 }}>
-                MAIN WEAPON · sets MC element &amp; charge attack
-              </div>
-              <MainWeaponSlot
-                weapon={main_weapon}
-                selected={weapon_slot === 0}
-                onTap={() => onSlotTap(0)}
-                onClear={() => onClearSlot(0)}
-              />
-            </div>
-
-            {/* 3×3 sub grid */}
-            <div>
-              <div style={{ fontSize:'0.6rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)', letterSpacing:'0.06em', marginBottom:6 }}>
-                SUB WEAPONS · all skills always active
-              </div>
-              <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:6 }}>
-                {[1,2,3,4,5,6,7,8,9].map(slot => (
-                  <SubWeaponSlot
-                    key={slot}
-                    slot={slot}
-                    weapon={getWeapon(grid_weapon_ids[slot])}
-                    selected={weapon_slot === slot}
-                    onTap={() => onSlotTap(slot)}
-                    onClear={() => onClearSlot(slot)}
-                  />
-                ))}
-              </div>
-            </div>
-
-            {/* Grid stats summary */}
-            {grid_stats && (
-              <div className="panel" style={{ padding:12 }}>
-                <div style={{ fontSize:'0.6rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)', letterSpacing:'0.06em', marginBottom:8 }}>
-                  GRID STATS
-                </div>
-                <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:5, marginBottom:8 }}>
-                  {[
-                    ['Normal ×', grid_stats.normal_mult.toFixed(3), 'var(--text-bright)'],
-                    ['Omega ×',  grid_stats.omega_mult.toFixed(3),  'var(--charge-blue)'],
-                    ['EX ×',     grid_stats.ex_mult.toFixed(3),     'var(--text-gold)'],
-                  ].map(([l,v,c]) => (
-                    <div key={l} style={{ background:'var(--bg-deep)', border:'1px solid var(--border-mid)', borderRadius:7, padding:'7px 8px', textAlign:'center' }}>
-                      <div style={{ fontSize:'0.55rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)', marginBottom:2 }}>{l}</div>
-                      <div style={{ fontFamily:'var(--font-mono)', fontSize:'0.9rem', fontWeight:700, color:c }}>{v}</div>
-                    </div>
-                  ))}
-                </div>
-                <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:5 }}>
-                  {[['ATK', grid_stats.grid_atk?.toLocaleString()], ['HP', grid_stats.grid_hp?.toLocaleString()], ['Crit', (grid_stats.crit_rate*100).toFixed(1)+'%'], ['Spd', grid_stats.charge_speed_bonus?(grid_stats.charge_speed_bonus*100).toFixed(0)+'%':'0%']].map(([l,v]) => (
-                    <div key={l} style={{ background:'var(--bg-deep)', border:'1px solid var(--border-dim)', borderRadius:6, padding:'6px 7px' }}>
-                      <div style={{ fontSize:'0.55rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)', marginBottom:2 }}>{l}</div>
-                      <div style={{ fontFamily:'var(--font-mono)', fontSize:'0.78rem', color:'var(--text-bright)', fontWeight:700 }}>{v||'—'}</div>
-                    </div>
-                  ))}
-                </div>
-                <div style={{ marginTop:8, fontSize:'0.58rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)', lineHeight:1.5 }}>
-                  DMG = ATK × {grid_stats.normal_mult.toFixed(2)} × {grid_stats.omega_mult.toFixed(2)} × {grid_stats.ex_mult.toFixed(2)} × Elem × Crit − DEF
-                </div>
-              </div>
-            )}
+        {/* Element */}
+        <div style={{ marginBottom:20 }}>
+          <div style={{ fontSize:'0.62rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)',
+            letterSpacing:'0.06em', marginBottom:8 }}>ELEMENT FILTER</div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:6 }}>
+            {ELEMENTS.map(e => (
+              <button key={e}
+                onClick={() => setElem(e)}
+                style={{
+                  padding:'7px 4px', borderRadius:8, border:'none', cursor:'pointer', fontSize:'0.65rem',
+                  fontFamily:'var(--font-mono)', fontWeight:700, transition:'all 0.12s',
+                  background: element===e ? 'rgba(32,96,200,0.25)' : 'rgba(255,255,255,0.04)',
+                  border: `1px solid ${element===e ? 'var(--border-bright)' : 'var(--border-dim)'}`,
+                  color: element===e ? ELEM_CLR[e] : 'var(--text-dim)',
+                }}>
+                {e}
+              </button>
+            ))}
           </div>
-
-          {/* Weapon picker panel — appears when a slot is selected */}
-          {weapon_slot !== null && (
-            <div style={{ borderLeft:'1px solid var(--border-dim)', display:'flex', flexDirection:'column', overflow:'hidden' }}>
-              <div style={{ padding:'10px 12px', borderBottom:'1px solid var(--border-dim)', flexShrink:0 }}>
-                <div style={{ fontSize:'0.65rem', color:'var(--gold-bright)', fontFamily:'var(--font-mono)', fontWeight:700, marginBottom:8 }}>
-                  ▶ Slot {weapon_slot}{weapon_slot===0?' (Main)':''} — pick weapon
-                </div>
-                <div style={{ display:'flex', gap:3, flexWrap:'wrap' }}>
-                  {['ALL','FIRE','WATER','EARTH','WIND','LIGHT','DARK'].map(e => (
-                    <button key={e} className="btn btn-ghost btn-sm"
-                      style={{ padding:'3px 7px', fontSize:'0.58rem',
-                        borderColor: filter_elem===e?'var(--border-bright)':undefined,
-                        color: filter_elem===e?'var(--text-bright)':undefined,
-                        background: filter_elem===e?'rgba(32,96,200,0.12)':undefined,
-                      }}
-                      onClick={() => onFilterElem(e)}
-                    >{e}</button>
-                  ))}
-                </div>
-              </div>
-              <div style={{ flex:1, overflowY:'auto', padding:'8px 10px', display:'flex', flexDirection:'column', gap:5 }}>
-                {filtered.map(w => {
-                  const in_grid = grid_weapon_ids.includes(w.id);
-                  return (
-                    <WeaponPickerCard
-                      key={w.id}
-                      weapon={w}
-                      in_grid={in_grid}
-                      onPick={() => !in_grid && onAssignWeapon(w.id)}
-                    />
-                  );
-                })}
-              </div>
+          {element !== 'ALL' && (
+            <div style={{ marginTop:8, fontSize:'0.6rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)', lineHeight:1.4 }}>
+              ℹ Slots with no {element} weapons will be left empty
             </div>
           )}
+        </div>
+
+        {/* Confirm */}
+        <div style={{ display:'flex', gap:8 }}>
+          <button className="btn btn-ghost" style={{ flex:1 }} onClick={onClose}>Cancel</button>
+          <button className="btn btn-gold" style={{ flex:2 }} onClick={() => onConfirm(stat, element)}>
+            ⚡ Auto Fill Grid
+          </button>
         </div>
       </div>
     </div>
   );
 }
 
+// ── WEAPON SLOT COMPONENTS ────────────────────────────────────────────────────
 function MainWeaponSlot({ weapon, selected, onTap, onClear }) {
   return (
     <div onClick={onTap} style={{
       border:`2px solid ${selected?'var(--border-bright)':weapon?'var(--gold-dim)':'var(--border-dim)'}`,
       borderRadius:12, cursor:'pointer', transition:'all 0.15s', position:'relative',
-      background: selected ? 'rgba(32,96,200,0.12)' : weapon ? 'linear-gradient(135deg,rgba(120,88,0,0.12),rgba(60,40,0,0.06))' : 'transparent',
+      background: selected?'rgba(32,96,200,0.12)':weapon?'linear-gradient(135deg,rgba(120,88,0,0.1),transparent)':'transparent',
       display:'flex', gap:12, padding:14, alignItems:'center',
     }}>
-      {/* Art placeholder */}
       <div style={{
         width:52, height:68, flexShrink:0, borderRadius:8,
         background:'rgba(255,255,255,0.04)', border:'1px solid var(--border-dim)',
         display:'flex', alignItems:'center', justifyContent:'center', fontSize:'2rem', position:'relative',
       }}>
-        {weapon ? '🗡' : <span style={{ fontSize:'1.5rem', opacity:0.2 }}>+</span>}
+        {weapon ? '🗡' : <span style={{ opacity:0.2 }}>+</span>}
         {weapon && (
-          <div style={{
-            position:'absolute', bottom:2, left:2, right:2, textAlign:'center',
-            fontSize:'0.48rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)',
-            background:'rgba(0,0,0,0.7)', borderRadius:3, padding:'1px 0',
-          }}>Skin</div>
+          <div style={{ position:'absolute', bottom:2, left:2, right:2, textAlign:'center',
+            fontSize:'0.45rem', color:'var(--text-dim)', background:'rgba(0,0,0,0.7)', borderRadius:3, padding:'1px 0' }}>Skin</div>
         )}
       </div>
-
       {weapon ? (
         <div style={{ flex:1 }}>
           <div style={{ display:'flex', justifyContent:'space-between', marginBottom:4 }}>
             <div style={{ fontFamily:'var(--font-display)', fontSize:'0.95rem', fontWeight:700 }}>{weapon.name}</div>
-            <span className={`rarity-${weapon.rarity}`} style={{ fontSize:'0.7rem', fontFamily:'var(--font-mono)' }}>{weapon.rarity}</span>
+            <span className={`rarity-${weapon.rarity}`} style={{ fontSize:'0.68rem', fontFamily:'var(--font-mono)' }}>{weapon.rarity}</span>
           </div>
-          <div style={{ display:'flex', gap:8, marginBottom:5, alignItems:'center' }}>
-            <ElementBadge element={weapon.element} />
-          </div>
+          <div style={{ display:'flex', gap:8, marginBottom:5 }}><ElementBadge element={weapon.element} /></div>
           <div style={{ display:'flex', gap:10, marginBottom:5 }}>
-            <span style={{ fontSize:'0.68rem', color:'#60cc60', fontFamily:'var(--font-mono)' }}>♦ {weapon.base_hp}</span>
-            <span style={{ fontSize:'0.68rem', color:'#ff9020', fontFamily:'var(--font-mono)' }}>✦ {weapon.base_atk}</span>
+            <span style={{ fontSize:'0.65rem', color:'#60cc60', fontFamily:'var(--font-mono)' }}>♦ {weapon.base_hp}</span>
+            <span style={{ fontSize:'0.65rem', color:'#ff9020', fontFamily:'var(--font-mono)' }}>✦ {weapon.base_atk}</span>
           </div>
           <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
             {weapon.skills.map((sk,i) => (
-              <span key={i} style={{
-                fontSize:'0.6rem', fontFamily:'var(--font-mono)', padding:'2px 7px', borderRadius:20,
+              <span key={i} style={{ fontSize:'0.58rem', fontFamily:'var(--font-mono)', padding:'2px 7px', borderRadius:20,
                 background:'rgba(255,255,255,0.05)', border:`1px solid ${SKILL_CLR[sk.skill_type]||'var(--border-dim)'}`,
-                color: SKILL_CLR[sk.skill_type]||'var(--text-mid)',
-              }}>{SKILL_LABEL[sk.skill_type]||sk.skill_type} +{skillMag(sk)}</span>
+                color:SKILL_CLR[sk.skill_type]||'var(--text-mid)' }}>
+                {SKILL_LABEL[sk.skill_type]||sk.skill_type} +{skillMag(sk)}
+              </span>
             ))}
           </div>
         </div>
       ) : (
-        <div style={{ color:'var(--text-dim)', fontSize:'0.8rem' }}>
+        <div style={{ color:'var(--text-dim)', fontSize:'0.78rem' }}>
           {selected ? '← Pick from weapon list' : 'Tap to set Main Weapon'}
         </div>
       )}
-
       {weapon && (
-        <button className="btn btn-danger" style={{ position:'absolute', top:6, right:6, padding:'2px 7px', fontSize:'0.6rem', minHeight:'unset' }}
+        <button className="btn btn-danger" style={{ position:'absolute', top:6, right:6, padding:'2px 6px', fontSize:'0.58rem', minHeight:'unset' }}
           onClick={e => { e.stopPropagation(); onClear(); }}>✕</button>
       )}
     </div>
@@ -721,35 +846,31 @@ function SubWeaponSlot({ slot, weapon, selected, onTap, onClear }) {
     <div onClick={onTap} style={{
       border:`1px solid ${selected?'var(--border-bright)':weapon?'var(--border-mid)':'var(--border-dim)'}`,
       borderRadius:9, cursor:'pointer', transition:'all 0.12s', position:'relative',
-      background: selected ? 'rgba(32,96,200,0.12)' : weapon ? 'rgba(255,255,255,0.02)' : 'transparent',
+      background:selected?'rgba(32,96,200,0.12)':weapon?'rgba(255,255,255,0.02)':'transparent',
       minHeight:72, padding:'8px 8px 6px', userSelect:'none',
     }}>
       {weapon ? (
         <>
-          <div style={{ display:'flex', justifyContent:'space-between', marginBottom:3 }}>
-            <span style={{ fontFamily:'var(--font-display)', fontSize:'0.68rem', fontWeight:700, paddingRight:14, lineHeight:1.3 }}>{weapon.name}</span>
-          </div>
+          <div style={{ fontFamily:'var(--font-display)', fontSize:'0.68rem', fontWeight:700, marginBottom:3, paddingRight:16, lineHeight:1.3 }}>{weapon.name}</div>
           <ElementBadge element={weapon.element} />
           <div style={{ display:'flex', gap:5, marginTop:3 }}>
-            <span style={{ fontSize:'0.58rem', color:'#60cc60', fontFamily:'var(--font-mono)' }}>♦{weapon.base_hp}</span>
-            <span style={{ fontSize:'0.58rem', color:'#ff9020', fontFamily:'var(--font-mono)' }}>✦{weapon.base_atk}</span>
+            <span style={{ fontSize:'0.56rem', color:'#60cc60', fontFamily:'var(--font-mono)' }}>♦{weapon.base_hp}</span>
+            <span style={{ fontSize:'0.56rem', color:'#ff9020', fontFamily:'var(--font-mono)' }}>✦{weapon.base_atk}</span>
           </div>
           {weapon.skills.slice(0,1).map((sk,i) => (
-            <div key={i} style={{ fontSize:'0.53rem', color:SKILL_CLR[sk.skill_type]||'var(--text-dim)', fontFamily:'var(--font-mono)', marginTop:2 }}>
+            <div key={i} style={{ fontSize:'0.52rem', color:SKILL_CLR[sk.skill_type]||'var(--text-dim)', fontFamily:'var(--font-mono)', marginTop:2 }}>
               {SKILL_LABEL[sk.skill_type]} +{skillMag(sk)}
             </div>
           ))}
-          <span className={`rarity-${weapon.rarity}`} style={{ position:'absolute', top:5, right:22, fontSize:'0.52rem', fontFamily:'var(--font-mono)' }}>
-            {weapon.rarity}
-          </span>
-          <button className="btn btn-danger" style={{ position:'absolute', top:4, right:4, padding:'1px 4px', fontSize:'0.5rem', minHeight:'unset' }}
+          <span className={`rarity-${weapon.rarity}`} style={{ position:'absolute', top:5, right:22, fontSize:'0.5rem', fontFamily:'var(--font-mono)' }}>{weapon.rarity}</span>
+          <button className="btn btn-danger" style={{ position:'absolute', top:4, right:4, padding:'1px 4px', fontSize:'0.48rem', minHeight:'unset' }}
             onClick={e => { e.stopPropagation(); onClear(); }}>✕</button>
         </>
       ) : (
         <div style={{ height:'100%', minHeight:50, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:2 }}>
-          <span style={{ fontSize:'1rem', opacity:0.2 }}>+</span>
-          <span style={{ fontSize:'0.52rem', color: selected?'var(--charge-blue)':'var(--text-dim)', fontFamily:'var(--font-mono)' }}>
-            {selected ? 'pick' : slot}
+          <span style={{ fontSize:'0.9rem', opacity:0.2 }}>+</span>
+          <span style={{ fontSize:'0.5rem', color:selected?'var(--charge-blue)':'var(--text-dim)', fontFamily:'var(--font-mono)' }}>
+            {selected?'pick':slot}
           </span>
         </div>
       )}
@@ -757,36 +878,37 @@ function SubWeaponSlot({ slot, weapon, selected, onTap, onClear }) {
   );
 }
 
-function WeaponPickerCard({ weapon, in_grid, onPick }) {
+function WeaponPickerCard({ weapon, in_grid, clickable, onPick }) {
   return (
-    <div style={{
-      background:'var(--bg-card)', borderRadius:8,
-      border:`1px solid ${in_grid?'var(--border-dim)':'var(--border-dim)'}`,
-      padding:'8px 10px', cursor: in_grid?'default':'pointer',
-      opacity: in_grid ? 0.4 : 1, transition:'all 0.12s',
+    <div style={{ background:'var(--bg-card)', borderRadius:8,
+      border:`1px solid ${in_grid ? 'var(--border-dim)' : 'var(--border-dim)'}`,
+      padding:'8px 10px',
+      cursor: clickable ? 'pointer' : 'default',
+      opacity: in_grid ? 0.38 : 1,
+      transition:'all 0.12s',
     }}
       onClick={onPick}
-      onMouseEnter={e => { if(!in_grid) e.currentTarget.style.borderColor='var(--border-bright)'; }}
+      onMouseEnter={e => { if(clickable) e.currentTarget.style.borderColor='var(--border-bright)'; }}
       onMouseLeave={e => e.currentTarget.style.borderColor='var(--border-dim)'}
     >
       <div style={{ display:'flex', justifyContent:'space-between', marginBottom:3 }}>
-        <span style={{ fontFamily:'var(--font-display)', fontSize:'0.8rem', fontWeight:700 }}>{weapon.name}</span>
-        <span className={`rarity-${weapon.rarity}`} style={{ fontSize:'0.65rem', fontFamily:'var(--font-mono)' }}>{RARITY_STARS[weapon.rarity]} {weapon.rarity}</span>
+        <span style={{ fontFamily:'var(--font-display)', fontSize:'0.78rem', fontWeight:700 }}>{weapon.name}</span>
+        <span className={`rarity-${weapon.rarity}`} style={{ fontSize:'0.62rem', fontFamily:'var(--font-mono)' }}>{RARITY_STARS[weapon.rarity]} {weapon.rarity}</span>
       </div>
       <div style={{ display:'flex', gap:6, marginBottom:4, alignItems:'center' }}>
         <ElementBadge element={weapon.element} />
-        <span style={{ fontSize:'0.6rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)' }}>✦{weapon.base_atk} ♦{weapon.base_hp}</span>
+        <span style={{ fontSize:'0.58rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)' }}>✦{weapon.base_atk} ♦{weapon.base_hp}</span>
       </div>
       <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
         {weapon.skills.map((sk,i) => (
-          <span key={i} style={{
-            fontSize:'0.58rem', fontFamily:'var(--font-mono)', padding:'1px 6px', borderRadius:20,
+          <span key={i} style={{ fontSize:'0.56rem', fontFamily:'var(--font-mono)', padding:'1px 6px', borderRadius:20,
             background:'rgba(255,255,255,0.04)', border:`1px solid ${SKILL_CLR[sk.skill_type]||'var(--border-dim)'}`,
-            color: SKILL_CLR[sk.skill_type]||'var(--text-mid)',
-          }}>{SKILL_LABEL[sk.skill_type]||sk.skill_type} +{skillMag(sk)}</span>
+            color:SKILL_CLR[sk.skill_type]||'var(--text-mid)' }}>
+            {SKILL_LABEL[sk.skill_type]||sk.skill_type} +{skillMag(sk)}
+          </span>
         ))}
       </div>
-      {in_grid && <div style={{ fontSize:'0.58rem', color:'var(--gold-dim)', marginTop:3, fontFamily:'var(--font-mono)' }}>✓ In grid</div>}
+      {in_grid && <div style={{ fontSize:'0.56rem', color:'var(--gold-dim)', marginTop:3, fontFamily:'var(--font-mono)' }}>✓ In grid</div>}
     </div>
   );
 }
@@ -796,18 +918,14 @@ function SummonTab() {
   return (
     <div style={{ height:'100%', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:12, padding:24 }}>
       <div style={{ fontSize:'3rem', opacity:0.3 }}>💎</div>
-      <div style={{ fontFamily:'var(--font-display)', fontSize:'1rem', color:'var(--text-dim)', textAlign:'center' }}>
-        Summon Grid
-      </div>
+      <div style={{ fontFamily:'var(--font-display)', fontSize:'1rem', color:'var(--text-dim)' }}>Summon Grid</div>
       <div style={{ fontSize:'0.78rem', color:'var(--text-dim)', fontStyle:'italic', textAlign:'center', maxWidth:300, lineHeight:1.6 }}>
-        Summons provide passive aura bonuses to your party.<br/>
-        Main summon can be called once in battle for a powerful active effect.
+        Summons provide passive aura bonuses to your party.<br/>Main summon can be called once per battle for a powerful active effect.
       </div>
-      <div style={{
-        padding:'8px 20px', borderRadius:20,
-        background:'rgba(100,100,100,0.1)', border:'1px solid var(--border-dim)',
-        fontSize:'0.72rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)',
-      }}>Coming in v2.0</div>
+      <div style={{ padding:'8px 20px', borderRadius:20, background:'rgba(100,100,100,0.1)',
+        border:'1px solid var(--border-dim)', fontSize:'0.72rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)' }}>
+        Coming in v2.0
+      </div>
     </div>
   );
 }
@@ -815,26 +933,19 @@ function SummonTab() {
 // ── BOTTOM NAV ────────────────────────────────────────────────────────────────
 function BottomNav({ ally_count, weapon_count, onBack, onConfirm }) {
   return (
-    <div style={{
-      background:'var(--bg-panel)', borderTop:'1px solid var(--border-dim)',
-      padding:'8px 12px', display:'flex', alignItems:'center', gap:8, flexShrink:0,
-    }}>
+    <div style={{ background:'var(--bg-panel)', borderTop:'1px solid var(--border-dim)',
+      padding:'7px 12px', display:'flex', alignItems:'center', gap:8, flexShrink:0 }}>
       <button className="btn btn-ghost btn-sm" onClick={onBack}>← Back</button>
-
-      {/* Resource counters */}
-      <div style={{ display:'flex', gap:6, marginLeft:6 }}>
-        <div style={{
-          padding:'3px 10px', borderRadius:20, fontSize:'0.65rem', fontFamily:'var(--font-mono)',
-          background:'rgba(255,255,255,0.05)', border:'1px solid var(--border-dim)',
-          color:'var(--text-mid)',
-        }}>👤 {ally_count}/3</div>
-        <div style={{
-          padding:'3px 10px', borderRadius:20, fontSize:'0.65rem', fontFamily:'var(--font-mono)',
-          background:'rgba(255,255,255,0.05)', border:'1px solid var(--border-dim)',
-          color:'var(--text-mid)',
-        }}>🗡 {weapon_count}/10</div>
+      <div style={{ display:'flex', gap:5, marginLeft:6 }}>
+        <div style={{ padding:'3px 10px', borderRadius:20, fontSize:'0.62rem', fontFamily:'var(--font-mono)',
+          background:'rgba(255,255,255,0.05)', border:'1px solid var(--border-dim)', color:'var(--text-mid)' }}>
+          👤 {ally_count}/3
+        </div>
+        <div style={{ padding:'3px 10px', borderRadius:20, fontSize:'0.62rem', fontFamily:'var(--font-mono)',
+          background:'rgba(255,255,255,0.05)', border:'1px solid var(--border-dim)', color:'var(--text-mid)' }}>
+          🗡 {weapon_count}/10
+        </div>
       </div>
-
       <button className="btn btn-gold btn-sm" style={{ marginLeft:'auto', padding:'6px 18px' }} onClick={onConfirm}>
         ✓ Done
       </button>
