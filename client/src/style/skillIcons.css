@@ -1,0 +1,47 @@
+/* Màu sắc nguyên tố từ file HTML gốc */
+:root {
+  --el-fire: #E85030; --el-fire-dark: #3A0800;
+  --el-water: #2980B9; --el-water-dark: #041530;
+  --el-earth: #B8822A; --el-earth-dark: #2A1800;
+  --el-wind: #27AE60; --el-wind-dark: #052010;
+  --el-light: #C8A800; --el-light-dark: #2A2000;
+  --el-dark: #7B1FA2; --el-dark-dark: #100020;
+}
+
+.skill-icon-container {
+  position: relative;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 0 0 2px rgba(0,0,0,0.85), 0 2px 8px rgba(0,0,0,0.6);
+  background: #000;
+}
+
+/* Hiệu ứng khối cầu (Orb) */
+.orb-bg {
+  position: absolute;
+  inset: 0;
+  border: 2px solid rgba(0,0,0,0.7);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 0 20px rgba(0,0,0,0.5);
+}
+
+/* Lớp phủ bóng loáng (Specular Highlight) */
+.orb-bg::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse 55% 45% at 28% 28%, rgba(255,255,255,0.32), transparent 55%);
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* Màu Gradient cho từng hệ */
+.orb-fire  { background: radial-gradient(circle at 40% 38%, var(--el-fire) 0%, #8B1A00 60%, var(--el-fire-dark) 100%); }
+.orb-water { background: radial-gradient(circle at 40% 38%, var(--el-water) 0%, #0D4A80 60%, var(--el-water-dark) 100%); }
+.orb-earth { background: radial-gradient(circle at 40% 38%, var(--el-earth) 0%, #6B4010 60%, var(--el-earth-dark) 100%); }
+.orb-wind  { background: radial-gradient(circle at 40% 38%, var(--el-wind) 0%, #145E30 60%, var(--el-wind-dark) 100%); }
+.orb-light { background: radial-gradient(circle at 40% 38%, var(--el-light) 0%, #7A6000 60%, var(--el-light-dark) 100%); }
+.orb-dark  { background: radial-gradient(circle at 40% 38%, var(--el-dark) 0%, #3A0860 60%, var(--el-dark-dark) 100%); }

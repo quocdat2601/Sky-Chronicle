@@ -14,7 +14,7 @@
 //   tier      — 'small'|'medium'|'big'|'massive' (default 'big')
 // ============================================================
 
-import { SKILL_TYPES, ELEMENT_PREFIXES } from '../../../../../server/data/catalog.js';
+import { SKILL_TYPES, ELEMENT_PREFIXES, getSkillName } from '@server-data/catalog.js';
 
 // ── Element orb art (inline SVG, no external dep) ──────────
 const EL_ART = {
@@ -302,24 +302,62 @@ export default function WeaponSkillIcon({ element, skillType, size = 48, tier = 
 
 // ── WeaponSkillRow — full row: icon + name + label ──────────
 // Drop this into PartyPage's weapon card rendering
-export function WeaponSkillRow({ element, skillType, tier = 'big', compact = false }) {
-  const def = SKILL_TYPES[skillType];
-  const prefixes = ELEMENT_PREFIXES[element];
-  if (!def || !prefixes) return null;
-  const name = `${prefixes[def.multiplierType]}'s ${def.suffix}`;
-  const size = compact ? 36 : 48;
+export function WeaponSkillRow({ weapon, skill }) {
+  const skillName = getSkillName(weapon.element, skill.skill_type); // Từ constants.js
+  const description = getFullSkillDescription(skill, weapon.element);
 
   return (
-    <div style={{ display:'flex', alignItems:'center', gap: compact ? 8 : 10 }}>
-      <WeaponSkillIcon element={element} skillType={skillType} size={size} tier={tier} />
-      <div>
-        <div style={{ fontSize: compact ? 12 : 13, fontWeight:500, color:'var(--color-text-primary)', whiteSpace:'nowrap' }}>
-          {name}
+    <div style={{ 
+      display: 'flex', 
+      gap: '12px', 
+      padding: '8px', 
+      background: 'rgba(0,0,0,0.3)', 
+      borderRadius: '4px',
+      marginBottom: '6px',
+      alignItems: 'center'
+    }}>
+      {/* Cột 1: Icon 3 lớp */}
+      <WeaponSkillIcon 
+        element={weapon.element} 
+        skillType={skill.skill_type} 
+        size={42} 
+        tier={skill.tier} 
+      />
+
+      {/* Cột 2: Nội dung văn bản (Bố cục dọc) */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', width: '220px' }}>
+          <span style={{ color: 'var(--text-gold)', fontWeight: 700, fontSize: '0.85rem' }}>
+            {skillName}
+          </span>
+          <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>
+            Lvl {skill.skill_level}
+          </span>
         </div>
-        <div style={{ fontSize: compact ? 10 : 11, color:'var(--color-text-secondary)' }}>
-          {def.suffix} · {def.multiplierType.toUpperCase()}
+        <div style={{ color: 'var(--text-bright)', fontSize: '0.75rem', lineHeight: '1.2' }}>
+          {description}
         </div>
       </div>
     </div>
   );
+}
+export function getFullSkillDescription(skill, element) {
+  const typeDef = SKILL_TYPES[skill.skill_type];
+  if (!typeDef) return "";
+  
+  const elemLabel = element.charAt(0).toUpperCase() + element.slice(1).toLowerCase();
+  const tierLabel = skill.tier ? (skill.tier.charAt(0).toUpperCase() + skill.tier.slice(1)) : "Big";
+  
+  // Ánh xạ các suffix sang tên chỉ số thực tế
+  const statMap = {
+    'Might': 'ATK',
+    'Verity': 'critical hit rate',
+    'Aegis': 'max HP',
+    'Stamina': 'ATK (Stamina)',
+    'Enmity': 'ATK (Enmity)'
+  };
+
+  const statDisplay = statMap[typeDef.suffix] || typeDef.label;
+  
+  return `${tierLabel} boost to ${elemLabel} allies' ${statDisplay}`;
 }
