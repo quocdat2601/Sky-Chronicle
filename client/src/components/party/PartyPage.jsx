@@ -17,10 +17,11 @@ function skillMag(sk) {
 // ── MAIN PAGE ─────────────────────────────────────────────────────────────────
 export function PartyPage() {
   const {
-    catalog_characters, catalog_weapons, loadCatalog,
+    catalog_characters, catalog_weapons, catalog_mc_classes, loadCatalog,
     party_character_ids, setPartyCharacters,
     grid_weapon_ids, setGridWeapon, clearGridSlot,
     grid_stats, calculateGridStats,
+    mc_class_id, setMcClass,
     setScreen,
   } = useGameStore();
 
@@ -28,6 +29,7 @@ export function PartyPage() {
   const [weapon_slot,  setWeaponSlot]  = useState(null);
   const [filter_elem,  setFilterElem]  = useState('ALL');
   const [auto_modal,   setAutoModal]   = useState(false); // Auto Select modal open
+  const [class_modal,  setClassModal]  = useState(false); // MC class picker modal
 
   // ── Slot swap state ─────────────────────────────────────────────────────────
   // selected_slot: index (0-2) of the header slot currently selected for swapping
@@ -141,7 +143,9 @@ export function PartyPage() {
         main_element={main_weapon?.element}
         party_complete={main_ids.length === 3}
         selected_slot={selected_slot}
+        mc_class={catalog_mc_classes.find(cl => cl.id === mc_class_id)}
         onHeaderSlotTap={onHeaderSlotTap}
+        onOpenClassModal={() => setClassModal(true)}
         onRemoveSlot={i => {
           const n = [...Array(3)].map((_,j) => main_ids[j]||null);
           n[i] = null;
@@ -149,6 +153,16 @@ export function PartyPage() {
           if (selected_slot === i) setSelectedSlot(null);
         }}
       />
+
+      {/* MC Class Picker Modal */}
+      {class_modal && (
+        <MCClassModal
+          classes={catalog_mc_classes}
+          current_id={mc_class_id}
+          onSelect={id => { setMcClass(id); setClassModal(false); }}
+          onClose={() => setClassModal(false)}
+        />
+      )}
 
       {/* ── ZONE 2: TAB BAR ── */}
       <TabBar active={active_tab} onChange={tab => {
@@ -202,10 +216,154 @@ export function PartyPage() {
   );
 }
 
-// ── HEADER BANNER — split 50/50: MC left, 3 ally slots right ────────────────
-function HeaderBanner({ main_ids, getChar, total_hp, total_atk, main_element, party_complete,
-                        selected_slot, onHeaderSlotTap, onRemoveSlot }) {
+// ─────────────────────────────────────────────────────────────────────────────
+// ROLE / EFFECT TYPE COLOURS
+// ─────────────────────────────────────────────────────────────────────────────
+const ROLE_CLR  = { ATTACK:'#ff5540', DEF:'#4499ff', HEAL:'#38e060', BALANCE:'#aa77ff', SPECIAL:'#ffaa20', ATK:'#ff5540' };
+const ROLE_ICON = { ATTACK:'⚔', ATK:'⚔', DEF:'🛡', HEAL:'💚', BALANCE:'⚖', SPECIAL:'✨' };
+const EFFECT_CLR= { DAMAGE:'#ff6040', BUFF:'#4090ff', HEAL:'#38e060', DEBUFF:'#c060ff' };
+const EFFECT_ICON={ DAMAGE:'⚔', BUFF:'↑', HEAL:'♥', DEBUFF:'↓' };
+const ROW_LABEL = { 1:'Row I', 2:'Row II', 3:'Row III', 4:'Row IV', 5:'Row V' };
+
+// ── MC CLASS PICKER MODAL ─────────────────────────────────────────────────────
+function MCClassModal({ classes, current_id, onSelect, onClose }) {
+  const row5 = classes.filter(cl => cl.row === 5);
+  const row1 = classes.filter(cl => cl.row <= 4);
+
+  return (
+    <div style={{
+      position:'fixed', inset:0, zIndex:900, background:'rgba(4,8,18,0.88)',
+      display:'flex', alignItems:'center', justifyContent:'center',
+    }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{
+        width:620, maxHeight:'85dvh', background:'var(--bg-panel)',
+        borderRadius:14, border:'1px solid var(--border-bright)',
+        display:'flex', flexDirection:'column', overflow:'hidden',
+      }}>
+        {/* Header */}
+        <div style={{ padding:'16px 20px', borderBottom:'1px solid var(--border-dim)', flexShrink:0 }}>
+          <div style={{ fontFamily:'var(--font-display)', color:'var(--text-gold)', fontSize:'1rem', fontWeight:700, marginBottom:3 }}>
+            Select MC Class
+          </div>
+          <div style={{ fontSize:'0.7rem', color:'var(--text-dim)', lineHeight:1.5 }}>
+            Row V classes unlock after reaching Master Level 30 on their prerequisite classes + 10,000 CP.
+          </div>
+        </div>
+
+        <div style={{ flex:1, overflowY:'auto', padding:'14px 16px', display:'flex', flexDirection:'column', gap:16 }}>
+          {/* Row V section */}
+          <div>
+            <div style={{ fontSize:'0.6rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)',
+              letterSpacing:'0.08em', marginBottom:10, display:'flex', alignItems:'center', gap:8 }}>
+              <span>ROW V — TIER 5</span>
+              <div style={{ flex:1, height:1, background:'var(--border-dim)' }} />
+              <span style={{ color:'var(--text-gold)' }}>★★★★★</span>
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8 }}>
+              {row5.map(cl => (
+                <ClassCard key={cl.id} cl={cl} active={cl.id===current_id} onSelect={onSelect} />
+              ))}
+            </div>
+          </div>
+
+          {/* Row I section */}
+          {row1.length > 0 && (
+            <div>
+              <div style={{ fontSize:'0.6rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)',
+                letterSpacing:'0.08em', marginBottom:10, display:'flex', alignItems:'center', gap:8 }}>
+                <span>STARTER CLASSES</span>
+                <div style={{ flex:1, height:1, background:'var(--border-dim)' }} />
+              </div>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8 }}>
+                {row1.map(cl => (
+                  <ClassCard key={cl.id} cl={cl} active={cl.id===current_id} onSelect={onSelect} />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div style={{ padding:'12px 16px', borderTop:'1px solid var(--border-dim)', flexShrink:0 }}>
+          <button className="btn btn-ghost" style={{ width:'100%' }} onClick={onClose}>✕ Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ClassCard({ cl, active, onSelect }) {
+  const role_clr = ROLE_CLR[cl.role] || 'var(--text-dim)';
+  const is_row5  = cl.row === 5;
+  return (
+    <div onClick={() => onSelect(cl.id)} style={{
+      borderRadius:10, border:`1.5px solid ${active ? 'var(--charge-blue)' : is_row5 ? 'var(--border-mid)' : 'var(--border-dim)'}`,
+      background: active
+        ? 'rgba(32,96,200,0.22)'
+        : is_row5
+          ? 'rgba(255,255,255,0.04)'
+          : 'rgba(255,255,255,0.02)',
+      padding:'10px 11px', cursor:'pointer', transition:'all 0.15s',
+      boxShadow: active ? '0 0 14px rgba(32,96,200,0.35)' : 'none',
+    }}>
+      {/* Top row: class name + row badge */}
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:5 }}>
+        <span style={{ fontFamily:'var(--font-display)', fontSize:'0.82rem', fontWeight:700, color: active ? 'var(--text-bright)' : 'var(--text-gold)' }}>
+          {cl.name}
+        </span>
+        <span style={{ fontSize:'0.52rem', fontFamily:'var(--font-mono)', fontWeight:700,
+          color: is_row5 ? 'var(--text-gold)' : 'var(--text-dim)',
+          background:'rgba(0,0,0,0.5)', padding:'1px 5px', borderRadius:3 }}>
+          {ROW_LABEL[cl.row] || 'Row'}
+        </span>
+      </div>
+
+      {/* Role badge */}
+      <div style={{ display:'flex', gap:4, alignItems:'center', marginBottom:6 }}>
+        <span style={{ fontSize:'0.62rem', fontFamily:'var(--font-mono)', fontWeight:700, color: role_clr }}>
+          {ROLE_ICON[cl.role]} {cl.role}
+        </span>
+      </div>
+
+      {/* Weapon proficiency */}
+      <div style={{ display:'flex', gap:4, flexWrap:'wrap', marginBottom:6 }}>
+        {cl.weapon_prof.map(wp => (
+          <span key={wp} style={{ fontSize:'0.52rem', fontFamily:'var(--font-mono)',
+            color:'var(--text-dim)', background:'rgba(255,255,255,0.06)',
+            border:'1px solid var(--border-dim)', padding:'1px 6px', borderRadius:10 }}>
+            {wp}
+          </span>
+        ))}
+      </div>
+
+      {/* Preset skill name */}
+      <div style={{ fontSize:'0.6rem', fontFamily:'var(--font-mono)', color:'var(--text-mid)',
+        borderTop:'1px solid var(--border-dim)', paddingTop:5, marginTop:2 }}>
+        <span style={{ color:'var(--text-dim)' }}>Preset: </span>
+        <span style={{ color:'var(--text-bright)', fontWeight:600 }}>{cl.preset_skill?.name}</span>
+      </div>
+
+      {/* Stats row */}
+      <div style={{ display:'flex', gap:8, marginTop:5, fontSize:'0.56rem', fontFamily:'var(--font-mono)' }}>
+        <span style={{ color:'#60cc60' }}>♦ {cl.base_hp.toLocaleString()}</span>
+        <span style={{ color:'#ff9020' }}>✦ {cl.base_atk.toLocaleString()}</span>
+      </div>
+
+      {/* Active indicator */}
+      {active && (
+        <div style={{ marginTop:6, fontSize:'0.52rem', fontFamily:'var(--font-mono)', fontWeight:700,
+          color:'var(--charge-blue)', textAlign:'center' }}>✓ EQUIPPED</div>
+      )}
+    </div>
+  );
+}
+
+// ── HEADER BANNER ─────────────────────────────────────────────────────────────
+function HeaderBanner({ main_ids, getChar, total_hp, total_atk, main_element,
+                        party_complete, selected_slot, mc_class,
+                        onHeaderSlotTap, onRemoveSlot, onOpenClassModal }) {
   const is_swap_mode = selected_slot !== null;
+  const [show_mc_skills, setShowMcSkills] = useState(false);
+  const role_clr = mc_class ? (ROLE_CLR[mc_class.role] || 'var(--text-dim)') : 'var(--gold-dim)';
 
   return (
     <div style={{
@@ -216,71 +374,102 @@ function HeaderBanner({ main_ids, getChar, total_hp, total_atk, main_element, pa
       {/* Two-column split */}
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', minHeight:130 }}>
 
-        {/* ── LEFT HALF: MC info ── */}
+        {/* ── LEFT HALF: MC ── */}
         <div style={{
           borderRight:'1px solid var(--border-dim)',
-          padding:'10px 14px',
-          display:'flex', gap:12, alignItems:'center',
+          display:'flex', flexDirection:'column',
           background:'linear-gradient(135deg,rgba(120,80,0,0.12) 0%,transparent 60%)',
         }}>
-          {/* MC portrait */}
-          <div style={{
-            width:76, height:'100%', minHeight:100, flexShrink:0, borderRadius:10,
-            position:'relative', overflow:'hidden',
-            background:'linear-gradient(160deg,rgba(120,80,0,0.45),rgba(40,20,0,0.7))',
-            border:'1px solid var(--gold-dim)',
-            display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'flex-end',
-            padding:'0 4px 6px',
-          }}>
-            <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', fontSize:'2.6rem', opacity:0.18 }}>⚔</div>
-            {main_element && (
-              <div style={{ position:'absolute', top:6, right:6, fontSize:'0.9rem' }}>{ELEM_EMOJI[main_element]}</div>
-            )}
-            <div style={{ position:'relative', zIndex:1, fontSize:'0.5rem', color:'var(--gold-bright)', fontFamily:'var(--font-mono)',
-              background:'rgba(0,0,0,0.7)', borderRadius:4, padding:'1px 6px', textAlign:'center' }}>
-              Fighter
+          {/* MC main info row */}
+          <div style={{ padding:'10px 14px', display:'flex', gap:10, alignItems:'center', flex:1 }}>
+            {/* Portrait + class change button */}
+            <div style={{ flexShrink:0, display:'flex', flexDirection:'column', gap:4 }}>
+              <div style={{
+                width:68, height:72, borderRadius:10, position:'relative',
+                background:'linear-gradient(160deg,rgba(120,80,0,0.45),rgba(40,20,0,0.7))',
+                border:'1px solid var(--gold-dim)',
+                display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'flex-end',
+                padding:'0 4px 5px', overflow:'hidden', cursor:'pointer',
+              }} onClick={onOpenClassModal}>
+                <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', fontSize:'2.4rem', opacity:0.18 }}>
+                  {mc_class ? (ROLE_ICON[mc_class.role] || '⚔') : '⚔'}
+                </div>
+                {main_element && (
+                  <div style={{ position:'absolute', top:5, right:5, fontSize:'0.85rem' }}>{ELEM_EMOJI[main_element]}</div>
+                )}
+                <div style={{ position:'relative', zIndex:1, fontSize:'0.48rem', color:'var(--gold-bright)',
+                  fontFamily:'var(--font-mono)', background:'rgba(0,0,0,0.72)',
+                  borderRadius:4, padding:'1px 5px', textAlign:'center', whiteSpace:'nowrap' }}>
+                  {mc_class?.name || 'Fighter'}
+                </div>
+                {/* Change class hint */}
+                <div style={{ position:'absolute', inset:0, background:'rgba(32,96,200,0)', display:'flex',
+                  alignItems:'center', justifyContent:'center', borderRadius:10, transition:'background 0.15s' }}
+                  onMouseEnter={e => e.currentTarget.style.background='rgba(32,96,200,0.22)'}
+                  onMouseLeave={e => e.currentTarget.style.background='rgba(32,96,200,0)'}>
+                </div>
+              </div>
+              {/* Change class button */}
+              <button className="btn btn-ghost" style={{ padding:'2px 4px', fontSize:'0.5rem', textAlign:'center', lineHeight:1.3 }}
+                onClick={onOpenClassModal}>
+                ✦ Change
+              </button>
+            </div>
+
+            {/* MC stats */}
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ fontFamily:'var(--font-display)', fontSize:'0.82rem', fontWeight:700, color:'var(--text-gold)', marginBottom:1 }}>
+                Sky-Wanderer
+              </div>
+              <div style={{ display:'flex', gap:5, alignItems:'center', marginBottom:6 }}>
+                <span style={{ fontSize:'0.56rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)' }}>Lvl 1</span>
+                {mc_class && (
+                  <span style={{ fontSize:'0.56rem', fontFamily:'var(--font-mono)', fontWeight:700, color: role_clr,
+                    background:'rgba(0,0,0,0.4)', padding:'0 5px', borderRadius:3 }}>
+                    {ROLE_ICON[mc_class.role]} {mc_class.name}
+                  </span>
+                )}
+              </div>
+              <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:5 }}>
+                  <span style={{ fontSize:'0.58rem', color:'#60cc60', fontFamily:'var(--font-mono)', width:26 }}>♦ HP</span>
+                  <span style={{ fontSize:'0.84rem', color:'#60cc60', fontFamily:'var(--font-mono)', fontWeight:700 }}>{total_hp.toLocaleString()}</span>
+                </div>
+                <div style={{ display:'flex', alignItems:'center', gap:5 }}>
+                  <span style={{ fontSize:'0.58rem', color:'#ff9020', fontFamily:'var(--font-mono)', width:26 }}>✦ ATK</span>
+                  <span style={{ fontSize:'0.84rem', color:'#ff9020', fontFamily:'var(--font-mono)', fontWeight:700 }}>{total_atk.toLocaleString()}</span>
+                </div>
+              </div>
+              {party_complete && (
+                <div style={{ marginTop:5, fontSize:'0.54rem', color:'#60cc60', fontFamily:'var(--font-mono)', fontWeight:700,
+                  background:'rgba(50,180,50,0.15)', border:'1px solid rgba(50,180,50,0.35)',
+                  padding:'1px 7px', borderRadius:20, display:'inline-block' }}>✓ Complete</div>
+              )}
             </div>
           </div>
 
-          {/* MC stats */}
-          <div style={{ flex:1, minWidth:0 }}>
-            <div style={{ fontFamily:'var(--font-display)', fontSize:'0.85rem', fontWeight:700, color:'var(--text-gold)', marginBottom:1 }}>
-              Sky-Wanderer
-            </div>
-            <div style={{ fontSize:'0.58rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)', marginBottom:8 }}>
-              Fighter · Lvl 1
-            </div>
-            <div style={{ display:'flex', flexDirection:'column', gap:3 }}>
-              <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-                <span style={{ fontSize:'0.6rem', color:'#60cc60', fontFamily:'var(--font-mono)', width:28 }}>♦ HP</span>
-                <span style={{ fontSize:'0.88rem', color:'#60cc60', fontFamily:'var(--font-mono)', fontWeight:700 }}>
-                  {total_hp.toLocaleString()}
-                </span>
-              </div>
-              <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-                <span style={{ fontSize:'0.6rem', color:'#ff9020', fontFamily:'var(--font-mono)', width:28 }}>✦ ATK</span>
-                <span style={{ fontSize:'0.88rem', color:'#ff9020', fontFamily:'var(--font-mono)', fontWeight:700 }}>
-                  {total_atk.toLocaleString()}
-                </span>
-              </div>
-            </div>
-            {party_complete && (
-              <div style={{ marginTop:8, fontSize:'0.58rem', color:'#60cc60', fontFamily:'var(--font-mono)', fontWeight:700,
-                background:'rgba(50,180,50,0.15)', border:'1px solid rgba(50,180,50,0.35)',
-                padding:'2px 8px', borderRadius:20, display:'inline-block' }}>✓ Complete</div>
-            )}
-          </div>
+          {/* MC skills toggle strip */}
+          <button style={{
+            width:'100%', padding:'5px 14px', border:'none', borderTop:'1px solid var(--border-dim)',
+            background: show_mc_skills ? 'rgba(32,96,200,0.12)' : 'rgba(255,255,255,0.02)',
+            color: show_mc_skills ? 'var(--charge-blue)' : 'var(--text-dim)',
+            fontSize:'0.58rem', fontFamily:'var(--font-mono)', letterSpacing:'0.05em',
+            cursor:'pointer', display:'flex', justifyContent:'space-between', alignItems:'center',
+            transition:'all 0.15s',
+          }} onClick={() => setShowMcSkills(p => !p)}>
+            <span>CLASS SKILLS</span>
+            <span>{show_mc_skills ? '▲' : '▼'}</span>
+          </button>
         </div>
 
         {/* ── RIGHT HALF: 3 main ally slots ── */}
         <div style={{ padding:'10px 12px 10px 10px', display:'flex', flexDirection:'column', gap:0 }}>
-          {/* Label */}
           <div style={{ fontSize:'0.55rem', color: is_swap_mode ? 'var(--charge-blue)' : 'var(--text-dim)',
             fontFamily:'var(--font-mono)', letterSpacing:'0.06em', marginBottom:6,
             display:'flex', justifyContent:'space-between', alignItems:'center' }}>
             <span>
               {is_swap_mode
-                ? `SLOT ${selected_slot+1} SELECTED — tap another slot to swap positions`
+                ? `SLOT ${selected_slot+1} SELECTED — tap another slot to swap`
                 : 'MAIN MEMBERS · tap to select & swap'}
             </span>
             {is_swap_mode && (
@@ -290,40 +479,26 @@ function HeaderBanner({ main_ids, getChar, total_hp, total_atk, main_element, pa
               </button>
             )}
           </div>
-
-          {/* 3 slot cards in a row */}
           <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:6, flex:1 }}>
             {[0,1,2].map(i => {
               const char = getChar(main_ids[i]);
               const is_selected = selected_slot === i;
               const is_swap_target = is_swap_mode && selected_slot !== i;
-              const elem_rgb = char ? {
+              const elem_rgb = char ? ({
                 FIRE:'255,80,32', WATER:'48,180,255', EARTH:'136,204,68',
                 WIND:'160,255,176', LIGHT:'255,232,96', DARK:'192,96,255',
-              }[char.element] || '200,200,200' : null;
-
+              }[char.element] || '200,200,200') : null;
               return (
-                <div key={i}
-                  onClick={() => onHeaderSlotTap(i)}
-                  style={{
-                    borderRadius:9, overflow:'hidden', position:'relative', cursor:'pointer',
-                    border:`1px solid ${is_selected ? 'var(--charge-blue)' : is_swap_target ? 'rgba(100,200,255,0.5)' : char ? 'var(--border-mid)' : 'var(--border-dim)'}`,
-                    background: is_selected
-                      ? 'rgba(32,96,200,0.25)'
-                      : is_swap_target
-                        ? 'rgba(32,96,200,0.12)'
-                        : char
-                          ? `linear-gradient(160deg,rgba(${elem_rgb},0.18) 0%,transparent 80%)`
-                          : 'rgba(255,255,255,0.02)',
-                    padding:'6px 8px',
-                    transition:'all 0.15s',
-                    boxShadow: is_selected ? '0 0 12px rgba(64,144,255,0.4)' : is_swap_target ? '0 0 8px rgba(64,144,255,0.2)' : 'none',
-                    display:'flex', flexDirection:'column', justifyContent:'space-between', minHeight:80,
-                  }}
-                >
+                <div key={i} onClick={() => onHeaderSlotTap(i)} style={{
+                  borderRadius:9, overflow:'hidden', position:'relative', cursor:'pointer',
+                  border:`1px solid ${is_selected?'var(--charge-blue)':is_swap_target?'rgba(100,200,255,0.5)':char?'var(--border-mid)':'var(--border-dim)'}`,
+                  background: is_selected ? 'rgba(32,96,200,0.25)' : is_swap_target ? 'rgba(32,96,200,0.12)' : char ? `linear-gradient(160deg,rgba(${elem_rgb},0.18) 0%,transparent 80%)` : 'rgba(255,255,255,0.02)',
+                  padding:'6px 8px', transition:'all 0.15s',
+                  boxShadow: is_selected?'0 0 12px rgba(64,144,255,0.4)':is_swap_target?'0 0 8px rgba(64,144,255,0.2)':'none',
+                  display:'flex', flexDirection:'column', justifyContent:'space-between', minHeight:80,
+                }}>
                   {char ? (
                     <>
-                      {/* Top: rarity + remove */}
                       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
                         <span style={{ fontSize:'0.48rem', fontFamily:'var(--font-mono)', fontWeight:700, color:'#ffcc00',
                           background:'rgba(0,0,0,0.55)', padding:'1px 4px', borderRadius:3 }}>SSR</span>
@@ -333,7 +508,6 @@ function HeaderBanner({ main_ids, getChar, total_hp, total_atk, main_element, pa
                             onClick={e => { e.stopPropagation(); onRemoveSlot(i); }}>✕</button>
                         )}
                       </div>
-                      {/* Mid: name + type + element */}
                       <div>
                         <div style={{ fontSize:'0.65rem', fontFamily:'var(--font-display)', fontWeight:700, marginBottom:2, lineHeight:1.2 }}>{char.name}</div>
                         <div style={{ display:'flex', gap:3, alignItems:'center', flexWrap:'wrap', marginBottom:3 }}>
@@ -345,35 +519,28 @@ function HeaderBanner({ main_ids, getChar, total_hp, total_atk, main_element, pa
                           <span style={{ fontSize:'0.54rem', color:'#ff9020', fontFamily:'var(--font-mono)' }}>✦{char.base_atk.toLocaleString()}</span>
                         </div>
                       </div>
-                      {/* Swap overlay when this is the target */}
                       {is_swap_target && (
                         <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center',
                           background:'rgba(32,96,200,0.22)', borderRadius:8, pointerEvents:'none' }}>
-                          <span style={{ fontFamily:'var(--font-mono)', fontSize:'0.65rem', color:'var(--charge-blue)', fontWeight:700 }}>
-                            ⇄ swap
-                          </span>
+                          <span style={{ fontFamily:'var(--font-mono)', fontSize:'0.65rem', color:'var(--charge-blue)', fontWeight:700 }}>⇄ swap</span>
                         </div>
                       )}
-                      {/* Selected indicator */}
                       {is_selected && (
                         <div style={{ position:'absolute', bottom:4, right:5, fontSize:'0.5rem',
-                          color:'var(--charge-blue)', fontFamily:'var(--font-mono)', fontWeight:700 }}>
-                          selected
-                        </div>
+                          color:'var(--charge-blue)', fontFamily:'var(--font-mono)', fontWeight:700 }}>selected</div>
                       )}
                     </>
                   ) : (
                     <div style={{ height:'100%', display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:3 }}>
-                      {is_swap_target ? (
-                        <span style={{ fontFamily:'var(--font-mono)', fontSize:'0.65rem', color:'var(--charge-blue)', fontWeight:700 }}>→ move here</span>
-                      ) : (
-                        <>
-                          <span style={{ fontSize:'1rem', opacity:0.2 }}>+</span>
-                          <span style={{ fontSize:'0.52rem', color: is_selected?'var(--charge-blue)':'var(--text-dim)', fontFamily:'var(--font-mono)' }}>
-                            {is_selected ? 'pick from roster' : 'Empty'}
-                          </span>
-                        </>
-                      )}
+                      {is_swap_target
+                        ? <span style={{ fontFamily:'var(--font-mono)', fontSize:'0.65rem', color:'var(--charge-blue)', fontWeight:700 }}>→ move here</span>
+                        : <>
+                            <span style={{ fontSize:'1rem', opacity:0.2 }}>+</span>
+                            <span style={{ fontSize:'0.52rem', color: is_selected?'var(--charge-blue)':'var(--text-dim)', fontFamily:'var(--font-mono)' }}>
+                              {is_selected ? 'pick from roster' : 'Empty'}
+                            </span>
+                          </>
+                      }
                     </div>
                   )}
                 </div>
@@ -381,6 +548,162 @@ function HeaderBanner({ main_ids, getChar, total_hp, total_atk, main_element, pa
             })}
           </div>
         </div>
+      </div>
+
+      {/* MC SKILLS DRAWER — expands below the header row */}
+      {show_mc_skills && mc_class && (
+        <MCSkillsDrawer mc_class={mc_class} />
+      )}
+    </div>
+  );
+}
+
+// ── MC SKILLS DRAWER ──────────────────────────────────────────────────────────
+function MCSkillsDrawer({ mc_class }) {
+  return (
+    <div style={{
+      borderTop:'1px solid var(--border-dim)',
+      background:'rgba(4,8,18,0.6)',
+      padding:'10px 14px',
+      display:'flex', flexDirection:'column', gap:10,
+    }}>
+      {/* Row header: class name + weapon profs */}
+      <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+        <span style={{ fontFamily:'var(--font-display)', fontSize:'0.78rem', fontWeight:700, color:'var(--text-gold)' }}>
+          {mc_class.name}
+        </span>
+        <span style={{ fontSize:'0.6rem', color: ROLE_CLR[mc_class.role]||'var(--text-dim)', fontFamily:'var(--font-mono)', fontWeight:700 }}>
+          {ROLE_ICON[mc_class.role]} {mc_class.role}
+        </span>
+        <div style={{ display:'flex', gap:4, marginLeft:'auto' }}>
+          {mc_class.weapon_prof.map(wp => (
+            <span key={wp} style={{ fontSize:'0.5rem', fontFamily:'var(--font-mono)',
+              color:'var(--text-dim)', background:'rgba(255,255,255,0.06)',
+              border:'1px solid var(--border-dim)', padding:'1px 7px', borderRadius:10 }}>
+              {wp}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* Flavor */}
+      <div style={{ fontSize:'0.62rem', color:'var(--text-dim)', fontStyle:'italic', lineHeight:1.4 }}>
+        {mc_class.flavor}
+      </div>
+
+      {/* Skills grid — preset + subskills */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:8 }}>
+        {/* Preset skill */}
+        <MCSkillCard skill={mc_class.preset_skill} is_preset={true} />
+        {/* Subskills */}
+        {mc_class.skills?.map((sk, idx) => (
+          <MCSkillCard key={idx} skill={sk} is_preset={false} />
+        ))}
+        {/* CA placeholder */}
+        <MCSkillCard skill={mc_class.charge_attack} is_preset={false} is_ca={true} />
+      </div>
+
+      {/* Unlock note */}
+      {mc_class.row >= 5 && (
+        <div style={{ fontSize:'0.58rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)',
+          background:'rgba(240,192,48,0.06)', border:'1px solid rgba(240,192,48,0.15)',
+          borderRadius:6, padding:'5px 10px', lineHeight:1.5 }}>
+          🔓 Unlock: {mc_class.unlock_note}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── MC SKILL CARD ─────────────────────────────────────────────────────────────
+function MCSkillCard({ skill, is_preset, is_ca }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!skill) return null;
+
+  const effect_clr  = is_ca ? 'var(--text-gold)' : (EFFECT_CLR[skill.effect_type] || 'var(--text-dim)');
+  const effect_icon = is_ca ? '★' : (EFFECT_ICON[skill.effect_type] || '◆');
+  const is_free     = skill.cd === 0;
+
+  return (
+    <div
+      onClick={() => setExpanded(p => !p)}
+      style={{
+        borderRadius:9, border:`1px solid ${is_preset ? 'rgba(240,192,48,0.35)' : is_ca ? 'rgba(240,192,48,0.2)' : 'var(--border-dim)'}`,
+        background: is_preset
+          ? 'rgba(240,192,48,0.08)'
+          : is_ca
+            ? 'rgba(240,192,48,0.04)'
+            : 'rgba(255,255,255,0.02)',
+        cursor:'pointer', transition:'all 0.15s', overflow:'hidden',
+      }}>
+      {/* Icon row */}
+      <div style={{
+        height:44, display:'flex', alignItems:'center', justifyContent:'center', position:'relative',
+        background: is_preset
+          ? 'rgba(240,192,48,0.12)'
+          : is_ca
+            ? 'rgba(240,192,48,0.06)'
+            : `rgba(${skill.effect_type==='DAMAGE'?'255,80,32':skill.effect_type==='BUFF'?'64,144,255':skill.effect_type==='HEAL'?'56,224,96':'192,96,255'},0.12)`,
+        borderBottom:`1px solid ${is_preset?'rgba(240,192,48,0.2)':'var(--border-dim)'}`,
+      }}>
+        <div style={{
+          width:30, height:30, borderRadius:7,
+          background:`rgba(${skill.effect_type==='DAMAGE'?'255,80,32':skill.effect_type==='BUFF'?'64,144,255':skill.effect_type==='HEAL'?'56,224,96':'192,96,255'},0.2)`,
+          border:`1.5px solid ${effect_clr}`,
+          display:'flex', alignItems:'center', justifyContent:'center',
+          fontSize:'0.95rem', color: effect_clr,
+          boxShadow:`0 0 8px ${effect_clr}44`,
+        }}>{effect_icon}</div>
+        {/* Badges */}
+        {is_preset && (
+          <div style={{ position:'absolute', top:3, left:4, fontSize:'0.42rem', fontFamily:'var(--font-mono)',
+            color:'var(--text-gold)', background:'rgba(0,0,0,0.7)', padding:'1px 4px', borderRadius:3 }}>
+            PRESET
+          </div>
+        )}
+        {is_ca && (
+          <div style={{ position:'absolute', top:3, left:4, fontSize:'0.42rem', fontFamily:'var(--font-mono)',
+            color:'var(--text-gold)', background:'rgba(0,0,0,0.7)', padding:'1px 4px', borderRadius:3 }}>
+            CA
+          </div>
+        )}
+        {is_free && !is_ca && (
+          <div style={{ position:'absolute', top:3, right:4, fontSize:'0.42rem', fontFamily:'var(--font-mono)',
+            color:'#60cc60', background:'rgba(0,0,0,0.7)', padding:'1px 4px', borderRadius:3 }}>
+            FREE
+          </div>
+        )}
+      </div>
+
+      {/* Text */}
+      <div style={{ padding:'6px 7px' }}>
+        <div style={{ fontFamily:'var(--font-mono)', fontSize:'0.62rem', fontWeight:700,
+          color: is_ca ? 'var(--text-gold)' : 'var(--text-bright)', marginBottom:2, lineHeight:1.3 }}>
+          {skill.name}
+        </div>
+        {!is_ca && (
+          <div style={{ fontSize:'0.5rem', fontFamily:'var(--font-mono)', color:'var(--text-dim)', marginBottom:3 }}>
+            CD {is_free ? <span style={{ color:'#60cc60' }}>FREE</span> : `${skill.cd}t`}
+            {' · '}<span style={{ color: effect_clr }}>{skill.effect_type}</span>
+          </div>
+        )}
+        {is_ca && (
+          <div style={{ fontSize:'0.5rem', fontFamily:'var(--font-mono)', color:'var(--text-dim)', marginBottom:3 }}>
+            <span style={{ color:'rgba(240,192,48,0.6)' }}>v2.0 — grid CA system</span>
+          </div>
+        )}
+        {/* Expandable description */}
+        {expanded && (
+          <div style={{ fontSize:'0.58rem', color:'var(--text-dim)', lineHeight:1.45, marginTop:4,
+            borderTop:'1px solid var(--border-dim)', paddingTop:4 }}>
+            {skill.description}
+          </div>
+        )}
+        {!expanded && (
+          <div style={{ fontSize:'0.5rem', color:'rgba(100,120,160,0.5)', fontFamily:'var(--font-mono)' }}>
+            tap to expand ▼
+          </div>
+        )}
       </div>
     </div>
   );

@@ -185,8 +185,8 @@ export function calcGridStats(weapons /* Weapon[] */) {
 
     // Utility (capped)
     crit_rate:          Math.min(crit_sum,         CRIT_RATE_CAP),
-    da_rate:            Math.min(da_rate_sum,       DA_RATE_CAP),
-    ta_rate:            Math.min(ta_rate_sum,       TA_RATE_CAP),
+    da_rate:            process.env.DEBUG_DA_100 ? 1.0 : Math.min(da_rate_sum, DA_RATE_CAP),
+    ta_rate:            process.env.DEBUG_TA_100 ? 1.0 : Math.min(ta_rate_sum, TA_RATE_CAP),
     charge_speed_bonus: Math.min(charge_speed_sum,  CHARGE_SPEED_CAP),
 
     // Cap pool sums (clamped to weapon-pool max when applied)

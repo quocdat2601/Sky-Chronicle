@@ -28,13 +28,17 @@ export const useGameStore = create((set, get) => ({
   catalog_characters: [],
   catalog_weapons: [],
   catalog_bosses: [],
+  catalog_mc_classes: [],
+  mc_class_id: 'MC_FIGHTER',
+  setMcClass: (id) => set({ mc_class_id: id }),
   loadCatalog: async () => {
-    const [chars, weaps, bosses] = await Promise.all([
+    const [chars, weaps, bosses, mc_classes] = await Promise.all([
       fetch(`${API}/catalog/characters`).then(r => r.json()),
       fetch(`${API}/catalog/weapons`).then(r => r.json()),
       fetch(`${API}/catalog/bosses`).then(r => r.json()),
+      fetch(`${API}/catalog/mc-classes`).then(r => r.json()),
     ]);
-    set({ catalog_characters: chars, catalog_weapons: weaps, catalog_bosses: bosses });
+    set({ catalog_characters: chars, catalog_weapons: weaps, catalog_bosses: bosses, catalog_mc_classes: mc_classes });
   },
 
   // ── Party / Grid ─────────────────────────────────────────────────────────────
