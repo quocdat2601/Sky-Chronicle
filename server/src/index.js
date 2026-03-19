@@ -54,13 +54,6 @@ app.post('/api/raids', (req, res) => {
   }
 });
 
-app.post('/api/raids/:id/join', (req, res) => {
-  const { player_id, player_name, party_config, grid_config } = req.body;
-  const result = joinRoom({ room_id: req.params.id, player_id, player_name: player_name || 'Player', party_config, grid_config });
-  if (result.error) return res.status(400).json(result);
-  res.json(result);
-});
-
 app.get('/health', (_, res) => res.json({ ok: true }));
 
 // ── WEBSOCKET ─────────────────────────────────────────────────────────────────

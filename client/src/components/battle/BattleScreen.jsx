@@ -4,6 +4,8 @@ import { ElementBadge, BossHpBar, StatusEffectList, formatNumber } from '../../l
 
 // ── ELEMENT COLOURS ───────────────────────────────────────────────────────────
 const ELEM_CLR = { FIRE:'#ff5020', WATER:'#30b4ff', EARTH:'#88cc44', WIND:'#a0ffb0', LIGHT:'#ffe860', DARK:'#c060ff' };
+// RGB triplets used in gradient strings (no alpha component — callers append opacity)
+const ELEM_RGB = { FIRE:'255,80,32', WATER:'48,180,255', EARTH:'136,204,68', WIND:'160,255,176', LIGHT:'255,232,96', DARK:'192,96,255' };
 
 // ── ABILITY CAST FLASH ────────────────────────────────────────────────────────
 function AbilityFlash({ msg, onDone }) {
@@ -210,6 +212,7 @@ export function BattleScreen() {
             <CharDetailPanel
               char={selected_char}
               cat_char={cat_selected_char}
+              grid_stats={my_state?.grid_stats}
               is_attacking={is_attacking}
               onUseAbility={(ab_id, ab_name) => handleAbility(selected_char.id, ab_id, ab_name)}
               onAttack={doAttack}
@@ -343,7 +346,7 @@ function CharOverviewCard({ char, cat_char, is_selected, onSelect }) {
       {/* Portrait placeholder */}
       <div style={{
         width:38, height:38, flexShrink:0, borderRadius:7,
-        background:`linear-gradient(135deg,rgba(${char.element==='FIRE'?'255,80,32':char.element==='WATER'?'48,180,255':char.element==='EARTH'?'136,204,68':char.element==='WIND'?'160,255,176':char.element==='LIGHT'?'255,232,96':'192,96,255'},0.25),rgba(0,0,0,0.3))`,
+        background:`linear-gradient(135deg,rgba(${ELEM_RGB[char.element]||'128,128,128'},0.25),rgba(0,0,0,0.3))`,
         border:`1px solid ${ELEM_CLR[char.element]||'var(--border-dim)'}`,
         display:'flex', alignItems:'center', justifyContent:'center', fontSize:'1.1rem', position:'relative',
       }}>
@@ -410,11 +413,16 @@ function CharOverviewCard({ char, cat_char, is_selected, onSelect }) {
 // SECTION 3C — CHARACTER DETAIL PANEL (right column, half-width)
 // Full info: portrait, stats, buffs, skill cards, CA, ATTACK button
 // ══════════════════════════════════════════════════════════════════════════════
-function CharDetailPanel({ char, cat_char, is_attacking, onUseAbility, onAttack }) {
+function CharDetailPanel({ char, cat_char, grid_stats, is_attacking, onUseAbility, onAttack }) {
   const dead      = char.hp <= 0;
   const hp_pct    = char.hp / char.hp_max;
   const hp_cls    = hp_pct > 0.6 ? '' : hp_pct > 0.3 ? ' yellow' : ' red';
   const abilities = cat_char?.abilities || [];
+
+  // Effective ATK = (char.base_atk + grid_atk) × normal × omega × ex
+  const eff_atk = char.base_atk && grid_stats
+    ? Math.round((char.base_atk + (grid_stats.grid_atk || 0)) * (grid_stats.normal_mult || 1) * (grid_stats.omega_mult || 1) * (grid_stats.ex_mult || 1))
+    : null;
 
   return (
     <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:'var(--bg-deep)' }}>
@@ -422,13 +430,13 @@ function CharDetailPanel({ char, cat_char, is_attacking, onUseAbility, onAttack 
       {/* ── Character header ── */}
       <div style={{
         padding:'12px 14px', borderBottom:'1px solid var(--border-dim)', flexShrink:0,
-        background:`linear-gradient(135deg,rgba(${char.element==='FIRE'?'255,80,32':char.element==='WATER'?'48,180,255':char.element==='EARTH'?'136,204,68':char.element==='WIND'?'160,255,176':char.element==='LIGHT'?'255,232,96':'192,96,255'},0.12) 0%,transparent 60%)`,
+        background:`linear-gradient(135deg,rgba(${ELEM_RGB[char.element]||'128,128,128'},0.12) 0%,transparent 60%)`,
       }}>
         <div style={{ display:'flex', gap:12, alignItems:'flex-start' }}>
           {/* Portrait */}
           <div style={{
             width:64, height:64, flexShrink:0, borderRadius:10,
-            background:`linear-gradient(160deg,rgba(${char.element==='FIRE'?'255,80,32':char.element==='WATER'?'48,180,255':char.element==='EARTH'?'136,204,68':char.element==='WIND'?'160,255,176':char.element==='LIGHT'?'255,232,96':'192,96,255'},0.3),rgba(0,0,0,0.4))`,
+            background:`linear-gradient(160deg,rgba(${ELEM_RGB[char.element]||'128,128,128'},0.3),rgba(0,0,0,0.4))`,
             border:`1px solid ${ELEM_CLR[char.element]||'var(--border-dim)'}`,
             display:'flex', alignItems:'center', justifyContent:'center', fontSize:'2rem',
           }}>
@@ -456,6 +464,16 @@ function CharDetailPanel({ char, cat_char, is_attacking, onUseAbility, onAttack 
                 <div className={`bar-fill bar-hp${hp_cls}`} style={{ width:`${Math.max(0,Math.min(100,hp_pct*100))}%` }} />
               </div>
             </div>
+
+            {/* ATK stat */}
+            {eff_atk && (
+              <div style={{ display:'flex', justifyContent:'space-between', marginBottom:4 }}>
+                <span style={{ fontSize:'0.58rem', color:'#ff9020', fontFamily:'var(--font-mono)' }}>ATK</span>
+                <span style={{ fontSize:'0.62rem', color:'#ff9020', fontFamily:'var(--font-mono)', fontWeight:700 }}>
+                  {formatNumber(eff_atk)}
+                </span>
+              </div>
+            )}
 
             {/* Charge bar (yellow) */}
             <div>

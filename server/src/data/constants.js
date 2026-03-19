@@ -46,8 +46,13 @@ export function getSkillName(element, skill_type) {
   const def = SKILL_TYPES[skill_type];
   if (!def) return 'Unknown Skill';
   const prefixes = ELEMENT_PREFIXES[element];
-  if (!prefixes || !def.skill_category) return def.suffix ?? def.label;
-  return `${prefixes[def.skill_category]}'s ${def.suffix}`;
+  // Utility skills (skill_category: null) still receive the element prefix when
+  // they have a suffix — e.g. CRITICAL_RATE → "Inferno's Verity".
+  // Only fall back to bare label/suffix when there are no prefixes at all.
+  if (!prefixes) return def.suffix ?? def.label;
+  if (def.skill_category) return `${prefixes[def.skill_category]}'s ${def.suffix}`;
+  // Utility: use the 'normal' prefix bucket as the element identifier
+  return def.suffix ? `${prefixes.normal}'s ${def.suffix}` : (def.label ?? 'Unknown Skill');
 }
 
 // ── WEAPON SKILL TYPE REGISTRY ────────────────────────────────────────────────
@@ -76,21 +81,21 @@ export const SKILL_TYPES = {
   // ── ATK (Might) — all 3 brackets ──────────────────────────────────────────
   ATK_NORMAL: {
     label: 'Might', suffix: 'Might',
-    skill_category: 'normal', effect_id: 'might',
+    skill_category: 'normal', multiplierType: 'normal', effect_id: 'might',
     icon: { type: 'single', svg: 'might' },
     description: 'Flat ATK bonus to elemental allies. Amplified by Optimus/Six-Dragon summons.',
     is_pct: true, has_tier: true, hp_conditional: false,
   },
   ATK_OMEGA: {
     label: 'Omega Might', suffix: 'Might',
-    skill_category: 'omega', effect_id: 'might',
+    skill_category: 'omega', multiplierType: 'omega', effect_id: 'might',
     icon: { type: 'single', svg: 'might' },
     description: 'Flat ATK bonus. Amplified by the elemental Omega summon (e.g. Colossus, Varuna).',
     is_pct: true, has_tier: true, hp_conditional: false,
   },
   ATK_EX: {
     label: 'EX Might', suffix: 'Might',
-    skill_category: 'ex', effect_id: 'might',
+    skill_category: 'ex', multiplierType: 'ex', effect_id: 'might',
     icon: { type: 'single', svg: 'might' },
     description: 'Flat ATK bonus in the EX multiplier bracket. Not amplified by summons.',
     is_pct: true, has_tier: true, hp_conditional: false,
@@ -99,21 +104,21 @@ export const SKILL_TYPES = {
   // ── Stamina (high HP → ATK up) — all 3 brackets ───────────────────────────
   STAMINA_NORMAL: {
     label: 'Stamina', suffix: 'Stamina',
-    skill_category: 'normal', effect_id: 'stamina',
+    skill_category: 'normal', multiplierType: 'normal', effect_id: 'stamina',
     icon: { type: 'single', svg: 'stamina' },
     description: 'ATK scales UP with remaining HP. Full bonus at 100% HP. Amplified by Optimus summons.',
     is_pct: true, has_tier: true, hp_conditional: true,
   },
   STAMINA_OMEGA: {
     label: 'Omega Stamina', suffix: 'Stamina',
-    skill_category: 'omega', effect_id: 'stamina',
+    skill_category: 'omega', multiplierType: 'omega', effect_id: 'stamina',
     icon: { type: 'single', svg: 'stamina' },
     description: 'ATK scales UP with remaining HP. Amplified by the elemental Omega summon.',
     is_pct: true, has_tier: true, hp_conditional: true,
   },
   STAMINA_EX: {
     label: 'EX Stamina', suffix: 'Stamina',
-    skill_category: 'ex', effect_id: 'stamina',
+    skill_category: 'ex', multiplierType: 'ex', effect_id: 'stamina',
     icon: { type: 'single', svg: 'stamina' },
     description: 'ATK scales UP with remaining HP. In the EX bracket; not amplified by summons.',
     is_pct: true, has_tier: true, hp_conditional: true,
@@ -122,21 +127,21 @@ export const SKILL_TYPES = {
   // ── Enmity (low HP → ATK up) — all 3 brackets ─────────────────────────────
   ENMITY_NORMAL: {
     label: 'Enmity', suffix: 'Enmity',
-    skill_category: 'normal', effect_id: 'enmity',
+    skill_category: 'normal', multiplierType: 'normal', effect_id: 'enmity',
     icon: { type: 'single', svg: 'enmity' },
     description: 'ATK scales UP as HP drops. Maximum bonus near 1% HP. Amplified by Optimus summons.',
     is_pct: true, has_tier: true, hp_conditional: true,
   },
   ENMITY_OMEGA: {
     label: 'Omega Enmity', suffix: 'Enmity',
-    skill_category: 'omega', effect_id: 'enmity',
+    skill_category: 'omega', multiplierType: 'omega', effect_id: 'enmity',
     icon: { type: 'single', svg: 'enmity' },
     description: 'ATK scales UP as HP drops. Amplified by the elemental Omega summon.',
     is_pct: true, has_tier: true, hp_conditional: true,
   },
   ENMITY_EX: {
     label: 'EX Enmity', suffix: 'Enmity',
-    skill_category: 'ex', effect_id: 'enmity',
+    skill_category: 'ex', multiplierType: 'ex', effect_id: 'enmity',
     icon: { type: 'single', svg: 'enmity' },
     description: 'ATK scales UP as HP drops. In the EX bracket; not amplified by summons.',
     is_pct: true, has_tier: true, hp_conditional: true,
@@ -145,21 +150,21 @@ export const SKILL_TYPES = {
   // ── Majesty (ATK + HP) — all 3 brackets ───────────────────────────────────
   MAJESTY_NORMAL: {
     label: 'Majesty', suffix: 'Majesty',
-    skill_category: 'normal', effect_id: 'might',
+    skill_category: 'normal', multiplierType: 'normal', effect_id: 'might',
     icon: { type: 'dual', svg: 'might', svg2: 'hp' },
     description: 'Boosts both ATK and max HP of elemental allies. Amplified by Optimus summons.',
     is_pct: true, has_tier: true, hp_conditional: false,
   },
   MAJESTY_OMEGA: {
     label: 'Omega Majesty', suffix: 'Majesty',
-    skill_category: 'omega', effect_id: 'might',
+    skill_category: 'omega', multiplierType: 'omega', effect_id: 'might',
     icon: { type: 'dual', svg: 'might', svg2: 'hp' },
     description: 'Boosts both ATK and max HP. Amplified by the elemental Omega summon.',
     is_pct: true, has_tier: true, hp_conditional: false,
   },
   MAJESTY_EX: {
     label: 'EX Majesty', suffix: 'Majesty',
-    skill_category: 'ex', effect_id: 'might',
+    skill_category: 'ex', multiplierType: 'ex', effect_id: 'might',
     icon: { type: 'dual', svg: 'might', svg2: 'hp' },
     description: 'Boosts both ATK and max HP. In the EX bracket; not amplified by summons.',
     is_pct: true, has_tier: true, hp_conditional: false,
@@ -168,21 +173,21 @@ export const SKILL_TYPES = {
   // ── HP pool (Aegis) — all 3 brackets ──────────────────────────────────────
   HP_BOOST: {
     label: 'HP', suffix: 'Aegis',
-    skill_category: 'normal', effect_id: 'hp',
+    skill_category: 'normal', multiplierType: 'normal', effect_id: 'hp',
     icon: { type: 'single', svg: 'hp' },
     description: 'Boosts max HP of all allies (Normal bracket). Applied once when joining a raid.',
     is_pct: true, has_tier: true, hp_conditional: false,
   },
   HP_BOOST_OMEGA: {
     label: 'Omega HP', suffix: 'Aegis',
-    skill_category: 'omega', effect_id: 'hp',
+    skill_category: 'omega', multiplierType: 'omega', effect_id: 'hp',
     icon: { type: 'single', svg: 'hp' },
     description: 'Boosts max HP of all allies (Omega bracket). Amplified by the elemental Omega summon.',
     is_pct: true, has_tier: true, hp_conditional: false,
   },
   HP_BOOST_EX: {
     label: 'EX HP', suffix: 'Aegis',
-    skill_category: 'ex', effect_id: 'hp',
+    skill_category: 'ex', multiplierType: 'ex', effect_id: 'hp',
     icon: { type: 'single', svg: 'hp' },
     description: 'Boosts max HP of all allies (EX bracket). Not amplified by summons.',
     is_pct: true, has_tier: true, hp_conditional: false,
@@ -193,21 +198,21 @@ export const SKILL_TYPES = {
 
   CRITICAL_RATE: {
     label: 'Critical', suffix: 'Verity',
-    skill_category: null, effect_id: 'critical',
+    skill_category: null, multiplierType: null, effect_id: 'critical',
     icon: { type: 'single', svg: 'critical' },
     description: 'Adds to crit hit chance. Each hit rolls independently. Crits deal ×1.5 damage.',
     is_pct: true, has_tier: true, hp_conditional: false,
   },
   DA_RATE: {
     label: 'DA Rate', suffix: 'Courage',
-    skill_category: null, effect_id: 'da',
+    skill_category: null, multiplierType: null, effect_id: 'da',
     icon: { type: 'single', svg: 'da' },
     description: 'Chance to attack twice per turn. Each extra hit rolls its own crit.',
     is_pct: true, has_tier: true, hp_conditional: false,
   },
   TA_RATE: {
     label: 'TA Rate', suffix: 'Trium',
-    skill_category: null, effect_id: 'ta',
+    skill_category: null, multiplierType: null, effect_id: 'ta',
     icon: { type: 'single', svg: 'ta' },
     description: 'Chance to attack three times per turn. Only rolls if DA already proc\'d.',
     is_pct: true, has_tier: true, hp_conditional: false,
@@ -215,7 +220,7 @@ export const SKILL_TYPES = {
   // Trium = DA + TA simultaneously (multiattack rate) — 3-bolt icon
   TRIUM: {
     label: 'Trium', suffix: 'Trium',
-    skill_category: null, effect_id: 'trium',
+    skill_category: null, multiplierType: null, effect_id: 'trium',
     icon: { type: 'single', svg: 'trium' },
     description: 'Boosts both Double Attack and Triple Attack rate simultaneously.',
     is_pct: true, has_tier: true, hp_conditional: false,
@@ -223,7 +228,7 @@ export const SKILL_TYPES = {
   // Restraint = DA Rate + Crit Rate — composite 2-bolt + star icon
   RESTRAINT: {
     label: 'Restraint', suffix: 'Restraint',
-    skill_category: null, effect_id: 'restraint',
+    skill_category: null, multiplierType: null, effect_id: 'restraint',
     icon: { type: 'restraint' },
     description: 'Boosts Double Attack Rate and Critical Hit Rate simultaneously.',
     is_pct: true, has_tier: true, hp_conditional: false,
@@ -231,7 +236,7 @@ export const SKILL_TYPES = {
   // Celere = ATK + Crit — dual icon
   CELERE: {
     label: 'Celere', suffix: 'Celere',
-    skill_category: null, effect_id: 'might',
+    skill_category: null, multiplierType: null, effect_id: 'might',
     icon: { type: 'dual', svg: 'might', svg2: 'critical' },
     description: 'Boosts ATK and Critical Rate simultaneously.',
     is_pct: true, has_tier: true, hp_conditional: false,
@@ -239,47 +244,44 @@ export const SKILL_TYPES = {
   // Tyranny = big ATK boost but reduces HP — dual icon
   TYRANNY: {
     label: 'Tyranny', suffix: 'Tyranny',
-    skill_category: null, effect_id: 'might',
+    skill_category: null, multiplierType: null, effect_id: 'might',
     icon: { type: 'dual', svg: 'might', svg2: 'enmity' },
     description: 'Greatly boosts ATK but reduces party max HP.',
     is_pct: true, has_tier: true, hp_conditional: false,
   },
-
   CHARGE_SPEED: {
     label: 'Charge Speed', suffix: 'Alacrity',
-    skill_category: null, effect_id: 'prog',
+    skill_category: null, multiplierType: null, effect_id: 'prog',
     icon: { type: 'single', svg: 'prog' },
     description: 'Increases charge bar gain per turn.',
     is_pct: true, has_tier: true, hp_conditional: false,
   },
-
   // ── Damage cap raising ────────────────────────────────────────────────────
   DMG_CAP_NA: {
     label: 'NA DMG Cap', suffix: 'Exceed',
-    skill_category: null, effect_id: 'cap',
+    skill_category: null, multiplierType: null, effect_id: 'cap',
     icon: { type: 'single', svg: 'cap' },
     description: 'Raises normal attack soft cap. All weapons share a +20% weapon pool limit.',
     is_pct: true, has_tier: true, hp_conditional: false,
   },
   DMG_CAP_CA: {
     label: 'CA DMG Cap', suffix: 'Exceed',
-    skill_category: null, effect_id: 'cap',
+    skill_category: null, multiplierType: null, effect_id: 'cap',
     icon: { type: 'single', svg: 'cap' },
     description: 'Raises charge attack soft cap. All weapons share a +100% weapon pool limit.',
     is_pct: true, has_tier: true, hp_conditional: false,
   },
-
   // ── Post-formula additions ─────────────────────────────────────────────────
   ELEM_AMPLIFY: {
     label: 'Elem. Amplify', suffix: 'Supplement',
-    skill_category: null, effect_id: 'supp',
+    skill_category: null, multiplierType: null, effect_id: 'supp',
     icon: { type: 'single', svg: 'supp' },
     description: 'Amplifies superior elemental damage. Only applies vs weak element. Cap 20%.',
     is_pct: true, has_tier: true, hp_conditional: false,
   },
   SUPPLEMENTAL: {
     label: 'Supp DMG', suffix: 'Supplement',
-    skill_category: null, effect_id: 'supp',
+    skill_category: null, multiplierType: null, effect_id: 'supp',
     icon: { type: 'single', svg: 'supp' },
     description: 'Adds flat damage per hit after all formula calculations. Immune to DEF and caps.',
     is_pct: false, has_tier: true, hp_conditional: false,

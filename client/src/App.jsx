@@ -8,8 +8,6 @@ export default function App() {
   const { screen, initSocket } = useGameStore();
   useEffect(() => { initSocket(); }, []);
   switch (screen) {
-    case 'party_builder':
-    case 'grid_builder':
     case 'party':   return <PartyPage />;
     case 'battle':  return <BattleScreen />;
     default:        return <LobbyScreen />;

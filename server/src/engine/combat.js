@@ -101,11 +101,14 @@ export function calcGridStats(weapons /* Weapon[] */) {
   let supp_flat = 0;  // flat damage per hit — NOT a percentage
   // ── Totals ────────────────────────────────────────────────────────────────
   let grid_atk = 0, grid_hp = 0;
+  // hp_skill_sum: sum of all HP-boosting skill magnitudes (Aegis + Majesty)
+  // Applied as: char.hp_max = base_hp × (1 + hp_skill_sum) per GBF wiki
+  let hp_skill_sum = 0;
 
   for (const w of weapons) {
     if (!w) continue;
     grid_atk += w.base_atk;
-    grid_hp  += w.base_hp;
+    grid_hp  += w.base_hp;  // weapon base HP — displayed as grid total, not per-character
 
     for (const skill of (w.skills || [])) {
       const mag = calcSkillMagnitude(skill);
@@ -130,14 +133,16 @@ export function calcGridStats(weapons /* Weapon[] */) {
         case 'ENMITY':         normal_enm  += mag; break;
 
         // ── Majesty (ATK + HP) ────────────────────────────────────────────────
-        case 'MAJESTY_NORMAL': normal_sum += mag; grid_hp += w.base_hp * mag; break;
-        case 'MAJESTY_OMEGA':  omega_sum  += mag; break;
-        case 'MAJESTY_EX':     ex_sum     += mag; break;
+        // ATK component goes to its bracket; HP component adds mag to hp_skill_sum
+        // (HP skill % applies to each char's base_hp, per GBF wiki)
+        case 'MAJESTY_NORMAL': normal_sum += mag; hp_skill_sum += mag; break;
+        case 'MAJESTY_OMEGA':  omega_sum  += mag; hp_skill_sum += mag; break;
+        case 'MAJESTY_EX':     ex_sum     += mag; hp_skill_sum += mag; break;
 
-        // ── HP pool (handled in raidManager on join; grid_hp already summed) ──
+        // ── HP skill (Aegis) — boosts each char's HP by mag% of their own base_hp ──
         case 'HP_BOOST':
         case 'HP_BOOST_OMEGA':
-        case 'HP_BOOST_EX':    break;
+        case 'HP_BOOST_EX':    hp_skill_sum += mag; break;
 
         // ── Utility ───────────────────────────────────────────────────────────
         case 'CRITICAL_RATE':  crit_sum        += mag; break;
@@ -149,6 +154,8 @@ export function calcGridStats(weapons /* Weapon[] */) {
         case 'RESTRAINT':      da_rate_sum     += mag; crit_sum    += mag; break;
         // CELERE = ATK + Crit (ATK goes into normal bracket)
         case 'CELERE':         normal_sum      += mag; crit_sum    += mag; break;
+        // TYRANNY = big ATK (normal bracket) but reduces each char's HP by mag%
+        case 'TYRANNY':        normal_sum += mag; hp_skill_sum -= mag; break;
         // Progression — accumulates each turn; stored for charge bar calc
         case 'CHARGE_SPEED':
         case 'PROG_NORMAL':
@@ -170,7 +177,8 @@ export function calcGridStats(weapons /* Weapon[] */) {
 
   return {
     grid_atk,
-    grid_hp,
+    grid_hp,      // sum of weapon base HP values — displayed as grid total stat
+    hp_skill_sum, // sum of HP skill magnitudes (Aegis + Majesty) — applied as % of char base_hp
 
     // Raw bracket sums — summon aura applied in calcDamage at hit time
     normal_sum,   omega_sum,   ex_sum,

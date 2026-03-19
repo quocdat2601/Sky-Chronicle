@@ -10,8 +10,8 @@ export const BOSSES = [
     id: 'BOSS001',
     name: 'Ignarok the Ashen Drake',
     element: 'FIRE',
-    hp_max: 800000,
-    def: 800,
+    hp_max: 600000000,
+    def: 25,
     base_atk: 3200,
     charge_gain_per_turn: 18,
     phases: [

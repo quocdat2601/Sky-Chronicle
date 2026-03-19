@@ -226,21 +226,23 @@ function RestraintBadge({ size }) {
 }
 
 // ── Dual badge (two separate effects side by side) ──────────
-function DualEffectBadge({ svg1, svg2, tier1, tier2, size }) {
-  const half = Math.round(size * 0.52);
+// Matches reference HTML: both badges full eSize, flex-row, e2 left / e1 right,
+// the PARENT layer positions this absolute bottom-right — no extra wrapper here.
+function DualEffectBadge({ svg1, svg2, tier1, tier2, size, scale }) {
+  const gap = Math.round(1 * (scale ?? 1));
   return (
-    <div style={{ display:'flex', alignItems:'flex-end', gap:0, width:size * 1.8, height:size }}>
-      <SingleEffectBadge svgKey={svg2} tier={tier2 ?? 'big'} size={half} />
-      <SingleEffectBadge svgKey={svg1} tier={tier1 ?? 'big'} size={half} />
+    <div style={{ display:'flex', flexDirection:'row', alignItems:'flex-end', gap }}>
+      <SingleEffectBadge svgKey={svg2} tier={tier2 ?? 'big'} size={size} />
+      <SingleEffectBadge svgKey={svg1} tier={tier1 ?? 'big'} size={size} />
     </div>
   );
 }
 
 // ── Map icon descriptor to badge component ──────────────────
-function EffectBadge({ iconDef, tier, size }) {
+function EffectBadge({ iconDef, tier, size, scale }) {
   if (!iconDef) return null;
   if (iconDef.type === 'restraint') return <RestraintBadge size={size} />;
-  if (iconDef.type === 'dual')      return <DualEffectBadge svg1={iconDef.svg} svg2={iconDef.svg2} tier1={tier} tier2={tier} size={size} />;
+  if (iconDef.type === 'dual')      return <DualEffectBadge svg1={iconDef.svg} svg2={iconDef.svg2} tier1={tier} tier2={tier} size={size} scale={scale} />;
   return <SingleEffectBadge svgKey={iconDef.svg} tier={tier} size={size} />;
 }
 
@@ -294,7 +296,7 @@ export default function WeaponSkillIcon({ element, skillType, size = 48, tier = 
         position:'absolute', bottom: Math.round(1*scale), right: Math.round(1*scale), zIndex:3,
         filter:'drop-shadow(0 1px 3px rgba(0,0,0,0.95))',
       }}>
-        <EffectBadge iconDef={def.icon} tier={tier} size={eSize} />
+        <EffectBadge iconDef={def.icon} tier={tier} size={eSize} scale={scale} />
       </div>
     </div>
   );
@@ -348,16 +350,29 @@ export function getFullSkillDescription(skill, element) {
   const elemLabel = element.charAt(0).toUpperCase() + element.slice(1).toLowerCase();
   const tierLabel = skill.tier ? (skill.tier.charAt(0).toUpperCase() + skill.tier.slice(1)) : "Big";
   
-  // Ánh xạ các suffix sang tên chỉ số thực tế
+  // Maps skill suffix → readable stat description used in the description line
   const statMap = {
-    'Might': 'ATK',
-    'Verity': 'critical hit rate',
-    'Aegis': 'max HP',
-    'Stamina': 'ATK (Stamina)',
-    'Enmity': 'ATK (Enmity)'
+    'Might':     'ATK',
+    'Stamina':   'ATK',
+    'Enmity':    'ATK',
+    'Aegis':     'max HP',
+    'Verity':    'critical hit rate',
+    'Courage':   'DA Rate',
+    'Trium':     'DA Rate and TA Rate',
+    'Majesty':   'ATK and max HP',
+    'Restraint': 'DA Rate and critical hit rate',
+    'Tyranny':   'ATK (reduces max HP)',
+    'Celere':    'ATK and critical hit rate',
+    'Alacrity':  'charge bar speed',
+    'Exceed':    'damage cap',
+    'Supplement':'elemental damage',
   };
 
   const statDisplay = statMap[typeDef.suffix] || typeDef.label;
-  
-  return `${tierLabel} boost to ${elemLabel} allies' ${statDisplay}`;
+
+  const hpClause =
+    typeDef.suffix === 'Stamina' ? ' based on how high HP is' :
+    typeDef.suffix === 'Enmity'  ? ' based on how low HP is'  : '';
+
+  return `${tierLabel} boost to ${elemLabel} allies' ${statDisplay}${hpClause}`;
 }

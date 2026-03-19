@@ -1,9 +1,13 @@
 import { create } from 'zustand';
 import { io } from 'socket.io-client';
-import { SKILL_TYPES } from '@server-data/catalog.js';
 
 const API = '/api';
 let socket = null;
+
+// MC (Sky-Wanderer) base stats — Fighter class at level 1
+// These mirror the GBF Fighter class baseline used in Estimated Damage calculations
+const MC_BASE_ATK = 1890;
+const MC_BASE_HP  = 3060;
 
 const ts = () => {
   const d = new Date();
@@ -50,55 +54,39 @@ export const useGameStore = create((set, get) => ({
   },
   grid_stats: null,
   calculateGridStats: async () => {
-  const ids = get().grid_weapon_ids.filter(Boolean);
-  if (!ids.length) { set({ grid_stats: null }); return; }
+    const ids = get().grid_weapon_ids.filter(Boolean);
+    if (!ids.length) { set({ grid_stats: null }); return; }
 
-  const stats = await fetch(`${API}/grid/calculate`, { 
-    method: 'POST', body: JSON.stringify({ weapon_ids: ids }),
-    headers: { 'Content-Type': 'application/json' }
-  }).then(r => r.json());
+    const stats = await fetch(`${API}/grid/calculate`, {
+      method: 'POST', body: JSON.stringify({ weapon_ids: ids }),
+      headers: { 'Content-Type': 'application/json' },
+    }).then(r => r.json());
 
-  const grid_weapons = ids.map(id => get().catalog_weapons.find(w => w.id === id)).filter(Boolean);
-  
-  // TỰ ĐỘNG KHỞI TẠO TẤT CẢ SKILL TỪ CONSTANTS
-  const skill_accumulators = {};
-  Object.keys(SKILL_TYPES).forEach(key => {
-    skill_accumulators[key] = 0;
-  });
+    // hp_skill_sum comes directly from server calcGridStats — no client recomputation needed
+    // Enrich server stats with pre-computed display fields used by UI panels
+    const enriched_stats = {
+      ...stats,
+      // hp_skill_pct: HP skill boost % per character (Aegis + Majesty, additive per GBF wiki)
+      hp_skill_pct:       (stats.hp_skill_sum || 0) * 100,
+      dmg_cap_na:         (stats.na_cap_bonus  || 0) * 100,
+      dmg_cap_ca:         (stats.ca_cap_bonus  || 0) * 100,
+      // Per-bracket stamina/enmity in % — sourced directly from server calcGridStats
+      stamina_normal_pct: (stats.normal_stam || 0) * 100,
+      stamina_omega_pct:  (stats.omega_stam  || 0) * 100,
+      stamina_ex_pct:     (stats.ex_stam     || 0) * 100,
+      enmity_normal_pct:  (stats.normal_enm  || 0) * 100,
+      enmity_omega_pct:   (stats.omega_enm   || 0) * 100,
+      enmity_ex_pct:      (stats.ex_enm      || 0) * 100,
+      supplemental:       stats.supp_flat    || 0,
+      // MC stats for Estimated Damage panel:
+      // Estimated DMG = (MC_base_atk + grid_atk) × normal × omega × ex
+      // GBF shows raw ATK output with no DEF divisor — it's a benchmark of offensive power
+      mc_max_hp:    Math.floor((MC_BASE_HP  + (stats.grid_hp  || 0)) * (1 + (stats.hp_skill_sum || 0))),
+      estimated_dmg: Math.round((MC_BASE_ATK + (stats.grid_atk || 0)) * stats.normal_mult * stats.omega_mult * stats.ex_mult),
+    };
 
-  // Cộng dồn chỉ số thực tế
-  grid_weapons.forEach(w => {
-    w.skills.forEach(sk => {
-      if (skill_accumulators.hasOwnProperty(sk.skill_type)) {
-        const mag = sk.magnitude_base + (sk.skill_level - 1) * sk.magnitude_per_level;
-        skill_accumulators[sk.skill_type] += mag;
-      }
-    });
-  });
-
-  set({ grid_stats: { 
-    ...stats, 
-    active_skills: skill_accumulators, // Lưu trữ toàn bộ object kỹ năng
-    estimated_dmg: stats.grid_atk * stats.normal_mult * stats.omega_mult * stats.ex_mult
-  }});
-
-  // Tính toán các trường dữ liệu cụ thể mà GridStatsPanel yêu cầu
-  const enriched_stats = {
-    ...stats,
-    active_skills: skill_accumulators,
-    // Tính toán các trường fallback để tránh lỗi giao diện
-    hp_boost_pct: (skill_accumulators['HP_BOOST'] || 0) * 100,
-    dmg_cap_na: (skill_accumulators['DMG_CAP_NA'] || 0) * 100,
-    dmg_cap_ca: (skill_accumulators['DMG_CAP_CA'] || 0) * 100,
-    stamina_boost_pct: (skill_accumulators['STAMINA_NORMAL'] || 0 + skill_accumulators['STAMINA_OMEGA'] || 0) * 100,
-    enmity_boost_pct: (skill_accumulators['ENMITY_NORMAL'] || 0 + skill_accumulators['ENMITY_OMEGA'] || 0) * 100,
-    defense_boost: (skill_accumulators['DEF'] || 0) * 100,
-    supplemental: skill_accumulators['SUPPLEMENTAL'] || 0,
-    estimated_dmg: stats.grid_atk * stats.normal_mult * stats.omega_mult * stats.ex_mult
-  };
-
-  set({ grid_stats: enriched_stats });
-},
+    set({ grid_stats: enriched_stats });
+  },
 
   // ── Raids lobby ──────────────────────────────────────────────────────────────
   raids_list: [],

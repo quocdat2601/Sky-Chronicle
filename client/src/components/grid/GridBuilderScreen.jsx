@@ -3,14 +3,34 @@ import { useGameStore } from '../../store/gameStore.js';
 import { ElementBadge, RARITY_STARS } from '../../lib/ui.jsx';
 
 const SKILL_LABEL = {
-  ATK_NORMAL:'Normal', ATK_OMEGA:'Omega', ATK_EX:'EX',
-  HP_BOOST:'HP+', CRITICAL_RATE:'Crit', CHARGE_SPEED:'Spd',
-  STAMINA:'Stam', ENMITY:'Enmity', DMG_CAP:'Cap',
+  ATK_NORMAL:     'Might',     ATK_OMEGA:      'Ω Might',   ATK_EX:         'EX Might',
+  STAMINA_NORMAL: 'Stamina',   STAMINA_OMEGA:  'Ω Stamina', STAMINA_EX:     'EX Stamina',
+  ENMITY_NORMAL:  'Enmity',    ENMITY_OMEGA:   'Ω Enmity',  ENMITY_EX:      'EX Enmity',
+  MAJESTY_NORMAL: 'Majesty',   MAJESTY_OMEGA:  'Ω Majesty', MAJESTY_EX:     'EX Majesty',
+  HP_BOOST:       'HP+',       HP_BOOST_OMEGA: 'Ω HP+',     HP_BOOST_EX:    'EX HP+',
+  CRITICAL_RATE:  'Crit',      DA_RATE:        'DA',        TA_RATE:        'TA',
+  TRIUM:          'Trium',     RESTRAINT:      'Restraint', CELERE:         'Celere',
+  TYRANNY:        'Tyranny',   CHARGE_SPEED:   'Spd',       DMG_CAP_NA:     'NA Cap',
+  DMG_CAP_CA:     'CA Cap',    ELEM_AMPLIFY:   'Amplify',   SUPPLEMENTAL:   'Supp',
+  // Legacy bare keys
+  STAMINA: 'Stamina', ENMITY: 'Enmity',
 };
 const SKILL_CLR = {
-  ATK_OMEGA:'var(--charge-blue)', ATK_EX:'var(--text-gold)',
-  ATK_NORMAL:'var(--text-mid)', STAMINA:'var(--hp-green)',
-  ENMITY:'var(--hp-red)', CRITICAL_RATE:'var(--crit-orange)',
+  ATK_NORMAL:     'var(--text-mid)',
+  ATK_OMEGA:      'var(--charge-blue)',
+  ATK_EX:         'var(--text-gold)',
+  STAMINA_NORMAL: 'var(--hp-green)',
+  STAMINA_OMEGA:  '#4fc3f7',
+  STAMINA_EX:     '#ffd54f',
+  ENMITY_NORMAL:  'var(--hp-red)',
+  ENMITY_OMEGA:   '#ef9a9a',
+  ENMITY_EX:      '#ff8a65',
+  MAJESTY_NORMAL: 'var(--text-mid)',
+  MAJESTY_OMEGA:  'var(--charge-blue)',
+  CRITICAL_RATE:  'var(--crit-orange)',
+  DA_RATE: 'var(--crit-orange)', TA_RATE: 'var(--crit-orange)',
+  TRIUM: 'var(--crit-orange)',   TYRANNY: 'var(--hp-red)',
+  STAMINA: 'var(--hp-green)',    ENMITY: 'var(--hp-red)',
 };
 
 export function GridBuilderScreen() {
@@ -126,6 +146,39 @@ export function GridBuilderScreen() {
                 ))}
               </div>
               <div className="divider" style={{ margin:'10px 0' }} />
+              {/* HP-conditional skill breakdown */}
+              {(() => {
+                const pct = v => v > 0 ? '+' + (v * 100).toFixed(1) + '%' : null;
+                const rows = [
+                  ['Might',   pct(grid_stats.normal_sum),  'var(--text-mid)',   pct(grid_stats.omega_sum),  'var(--charge-blue)', pct(grid_stats.ex_sum),  'var(--text-gold)'],
+                  ['Stamina', pct(grid_stats.normal_stam), 'var(--hp-green)',   pct(grid_stats.omega_stam), '#4fc3f7',            pct(grid_stats.ex_stam), '#ffd54f'],
+                  ['Enmity',  pct(grid_stats.normal_enm),  'var(--hp-red)',     pct(grid_stats.omega_enm),  '#ef9a9a',            pct(grid_stats.ex_enm),  '#ff8a65'],
+                ].filter(([, a,, b,, c]) => a || b || c);
+                if (!rows.length) return null;
+                return (
+                  <div style={{ marginBottom:8 }}>
+                    <div style={{ display:'grid', gridTemplateColumns:'60px 1fr 1fr 1fr', gap:4, marginBottom:3 }}>
+                      {['', 'Normal', 'Omega', 'EX'].map(h => (
+                        <div key={h} style={{ fontSize:'0.53rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)', textAlign:'center' }}>{h}</div>
+                      ))}
+                    </div>
+                    {rows.map(([label, nVal, nClr, oVal, oClr, eVal, eClr]) => (
+                      <div key={label} style={{ display:'grid', gridTemplateColumns:'60px 1fr 1fr 1fr', gap:4, marginBottom:3 }}>
+                        <div style={{ fontSize:'0.56rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)', display:'flex', alignItems:'center' }}>{label}</div>
+                        {[[nVal,nClr],[oVal,oClr],[eVal,eClr]].map(([v, c], i) => (
+                          <div key={i} style={{ background:'var(--bg-deep)', border:`1px solid ${v ? c : 'var(--border-dim)'}`, borderRadius:5, padding:'3px 5px', textAlign:'center', opacity: v ? 1 : 0.3 }}>
+                            <div style={{ fontFamily:'var(--font-mono)', fontSize:'0.7rem', fontWeight:700, color: v ? c : 'var(--text-dim)' }}>{v ?? '—'}</div>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                    <div style={{ fontSize:'0.52rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)', marginTop:4, lineHeight:1.4 }}>
+                      Stamina peaks at full HP · Enmity peaks at low HP
+                    </div>
+                  </div>
+                );
+              })()}
+              <div className="divider" style={{ margin:'8px 0' }} />
               <div style={{ fontSize:'0.62rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)', lineHeight:1.6 }}>
                 DMG = ATK × {grid_stats.normal_mult.toFixed(2)} × {grid_stats.omega_mult.toFixed(2)} × {grid_stats.ex_mult.toFixed(2)} × Elem × Crit − DEF
               </div>

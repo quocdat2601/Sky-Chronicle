@@ -13,8 +13,26 @@ import { BOSSES, CHARACTERS, WEAPONS } from '../data/catalog.js';
 import { calcGridStats, resolvePlayerAction, resolveBossAction, tickAllEffects, checkPhaseTransition } from '../engine/combat.js';
 
 const MAX_PLAYERS = 4;
+// Rooms are purged after these TTLs to prevent unbounded memory growth
+const ROOM_TTL_VICTORY_MS = 10 * 60 * 1000;  // 10 min after victory
+const ROOM_TTL_WAITING_MS = 30 * 60 * 1000;  // 30 min idle in WAITING
 
 const rooms = new Map();
+
+// ── ROOM CLEANUP ──────────────────────────────────────────────────────────────
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, room] of rooms) {
+    const age = now - room.created_at;
+    if (room.status === 'VICTORY' && age > ROOM_TTL_VICTORY_MS) {
+      rooms.delete(id);
+      console.log(`[Raid] Purged completed room ${id}`);
+    } else if (room.status === 'WAITING' && age > ROOM_TTL_WAITING_MS) {
+      rooms.delete(id);
+      console.log(`[Raid] Purged stale waiting room ${id}`);
+    }
+  }
+}, 5 * 60 * 1000); // runs every 5 minutes
 
 // ── BUILD RUNTIME CHARACTER STATE ─────────────────────────────────────────────
 function buildCharState(char_def) {
@@ -106,19 +124,15 @@ export function joinRoom({ room_id, player_id, player_name, party_config, grid_c
 
   const grid_stats = calcGridStats(weapons);
 
-  // Apply HP_BOOST
-  const hp_boost_sum = weapons.reduce((sum, w) => {
-    return sum + (w.skills || []).reduce((s, sk) => {
-      if (sk.skill_type !== 'HP_BOOST') return s;
-      return s + (sk.magnitude_base + (sk.skill_level - 1) * sk.magnitude_per_level);
-    }, 0);
-  }, 0);
-  if (hp_boost_sum > 0) {
-    for (const char of characters) {
-      const bonus = Math.floor(char.hp_max * hp_boost_sum);
-      char.hp_max += bonus;
-      char.hp = char.hp_max;
-    }
+  // Apply grid HP to all characters per GBF wiki:
+  //   effective_hp = (char.base_hp + grid_hp) × (1 + hp_skill_sum)
+  // grid_hp is weapon base HP — adds flatly to every character (same mechanic as grid_atk for ATK)
+  // hp_skill_sum is Aegis + Majesty skill magnitudes — multiplies the combined base
+  const grid_hp = grid_stats.grid_hp || 0;
+  const hp_skill_sum = grid_stats.hp_skill_sum || 0;
+  for (const char of characters) {
+    char.hp_max = Math.floor((char.hp_max + grid_hp) * (1 + hp_skill_sum));
+    char.hp = char.hp_max;
   }
 
   // MC element from main weapon
@@ -394,6 +408,7 @@ export function getPlayerSnapshot(player) {
       id: c.id,
       name: c.name,
       element: c.element,
+      base_atk: c.base_atk,
       hp: c.hp,
       hp_max: c.hp_max,
       charge_bar: c.charge_bar,

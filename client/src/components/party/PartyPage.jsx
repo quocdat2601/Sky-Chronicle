@@ -6,8 +6,6 @@ import WeaponSkillIcon, { WeaponSkillRow } from './WeaponSkillIcon.jsx';
 const TYPE_ICON  = { ATTACK:'⚔', DEFENSE:'🛡', HEAL:'💚', BALANCE:'⚖' };
 const TYPE_COLOR = { ATTACK:'var(--hp-red)', DEFENSE:'var(--charge-blue)', HEAL:'var(--hp-green)', BALANCE:'var(--text-gold)' };
 const RARITY_STARS = { SSR:'★★★', SR:'★★', R:'★' };
-const SKILL_LABEL = { ATK_NORMAL:'Normal', ATK_OMEGA:'Omega', ATK_EX:'EX', HP_BOOST:'HP+', CRITICAL_RATE:'Crit', CHARGE_SPEED:'Spd', STAMINA:'Stam', ENMITY:'Enmity', DMG_CAP:'Cap' };
-const SKILL_CLR   = { ATK_OMEGA:'var(--charge-blue)', ATK_EX:'var(--text-gold)', ATK_NORMAL:'var(--text-mid)', STAMINA:'var(--hp-green)', ENMITY:'var(--hp-red)', CRITICAL_RATE:'var(--crit-orange)' };
 const ELEM_EMOJI  = { FIRE:'🔥', WATER:'💧', EARTH:'🌍', WIND:'🌀', LIGHT:'☀', DARK:'🌑' };
 
 function skillMag(sk) {
@@ -125,9 +123,12 @@ export function PartyPage() {
     setAutoModal(false);
   };
 
-  // Totals for banner
-  const total_hp  = main_ids.reduce((s, id) => s + (getChar(id)?.base_hp  || 0), 0) + (grid_stats?.grid_hp  || 0);
-  const total_atk = main_ids.reduce((s, id) => s + (getChar(id)?.base_atk || 0), 0) + (grid_stats?.grid_atk || 0);
+  // MC banner shows flat base stats: MC_base + grid contribution (no skill multipliers)
+  // Skill multipliers are only applied in Estimated Damage panel and in raid combat
+  const MC_BASE_ATK = 1890;
+  const MC_BASE_HP  = 3060;
+  const total_atk = MC_BASE_ATK + (grid_stats?.grid_atk || 0);
+  const total_hp  = MC_BASE_HP  + (grid_stats?.grid_hp  || 0);
 
   return (
     <div style={{ height:'100dvh', display:'flex', flexDirection:'column', background:'var(--bg-void)', overflow:'hidden' }}>
@@ -140,6 +141,7 @@ export function PartyPage() {
         total_atk={total_atk}
         main_element={main_weapon?.element}
         party_complete={main_ids.length === 3}
+        grid_stats={grid_stats}
         selected_slot={selected_slot}
         onHeaderSlotTap={onHeaderSlotTap}
         onRemoveSlot={i => {
@@ -204,8 +206,17 @@ export function PartyPage() {
 
 // ── HEADER BANNER — split 50/50: MC left, 3 ally slots right ────────────────
 function HeaderBanner({ main_ids, getChar, total_hp, total_atk, main_element, party_complete,
-                        selected_slot, onHeaderSlotTap, onRemoveSlot }) {
+                        grid_stats, selected_slot, onHeaderSlotTap, onRemoveSlot }) {
   const is_swap_mode = selected_slot !== null;
+
+  // Pre-compute grid multipliers — mirrors raidManager / GBF wiki:
+  // Teammate cards show flat base stats: char.base + grid contribution (no skill multipliers)
+  // Same principle as MC card — skill multipliers shown only in Estimated Damage / raid
+  const grid_atk    = grid_stats?.grid_atk || 0;
+  const grid_hp_val = grid_stats?.grid_hp  || 0;
+
+  const boostedAtk = (base) => base + grid_atk;
+  const boostedHp  = (base) => base + grid_hp_val;
 
   return (
     <div style={{
@@ -341,8 +352,8 @@ function HeaderBanner({ main_ids, getChar, total_hp, total_atk, main_element, pa
                           <ElementBadge element={char.element} />
                         </div>
                         <div style={{ display:'flex', gap:6 }}>
-                          <span style={{ fontSize:'0.54rem', color:'#60cc60', fontFamily:'var(--font-mono)' }}>♦{char.base_hp.toLocaleString()}</span>
-                          <span style={{ fontSize:'0.54rem', color:'#ff9020', fontFamily:'var(--font-mono)' }}>✦{char.base_atk.toLocaleString()}</span>
+                          <span style={{ fontSize:'0.54rem', color:'#60cc60', fontFamily:'var(--font-mono)' }}>♦{boostedHp(char.base_hp).toLocaleString()}</span>
+                          <span style={{ fontSize:'0.54rem', color:'#ff9020', fontFamily:'var(--font-mono)' }}>✦{boostedAtk(char.base_atk).toLocaleString()}</span>
                         </div>
                       </div>
                       {/* Swap overlay when this is the target */}
@@ -1001,20 +1012,23 @@ function GridStatsPanel({ grid_stats, main_element }) {
 
   // 1. Danh sách tất cả các chỉ số tiềm năng dựa trên constants.js
   const allPossibleBoosts = [
-    { label: "Might", val: (grid_stats.normal_mult - 1) * 100, color: "var(--hp-red)" },
-    { label: "Ω Might", val: (grid_stats.omega_mult - 1) * 100, color: "var(--charge-blue)" },
-    { label: "EX Might", val: (grid_stats.ex_mult - 1) * 100, color: "var(--text-gold)" },
-    { label: "Stamina", val: grid_stats.stamina_boost_pct || 0, color: "var(--hp-green)" },
-    { label: "Enmity", val: grid_stats.enmity_boost_pct || 0, color: "var(--hp-red)" },
-    { label: "HP Boost", val: grid_stats.hp_boost_pct || 0, color: "#60cc60" },
-    { label: "DEF", val: grid_stats.defense_boost || 0, color: "var(--charge-blue)" },
-    { label: "Critical", val: (grid_stats.crit_rate || 0) * 100, color: "var(--crit-orange)" },
-    { label: "NA Cap", val: grid_stats.dmg_cap_na || 0, color: "var(--text-gold)" },
-    { label: "CA Cap", val: grid_stats.dmg_cap_ca || 0, color: "var(--text-gold)" },
-    { label: "DMG Supp.", val: grid_stats.supplemental || 0, color: "var(--text-gold)", isFlat: true },
+    { label: "Might",       val: (grid_stats.normal_mult - 1) * 100,        color: "var(--text-mid)"     },
+    { label: "Ω Might",     val: (grid_stats.omega_mult  - 1) * 100,        color: "var(--charge-blue)"  },
+    { label: "EX Might",    val: (grid_stats.ex_mult     - 1) * 100,        color: "var(--text-gold)"    },
+    { label: "Stamina",     val: grid_stats.stamina_normal_pct || 0,         color: "var(--hp-green)"     },
+    { label: "Ω Stamina",   val: grid_stats.stamina_omega_pct  || 0,         color: "#4fc3f7"             },
+    { label: "EX Stamina",  val: grid_stats.stamina_ex_pct     || 0,         color: "#ffd54f"             },
+    { label: "Enmity",      val: grid_stats.enmity_normal_pct  || 0,         color: "var(--hp-red)"       },
+    { label: "Ω Enmity",    val: grid_stats.enmity_omega_pct   || 0,         color: "#ef9a9a"             },
+    { label: "EX Enmity",   val: grid_stats.enmity_ex_pct      || 0,         color: "#ff8a65"             },
+    { label: "HP Skill",    val: grid_stats.hp_skill_pct        || 0,         color: "#60cc60"             },
+    { label: "Critical",    val: (grid_stats.crit_rate || 0) * 100,          color: "var(--crit-orange)"  },
+    { label: "NA Cap",      val: grid_stats.dmg_cap_na          || 0,         color: "var(--text-gold)"    },
+    { label: "CA Cap",      val: grid_stats.dmg_cap_ca          || 0,         color: "var(--text-gold)"    },
+    { label: "DMG Supp.",   val: grid_stats.supplemental         || 0,         color: "var(--text-gold)", isFlat: true },
   ];
 
-  // 2. LỌC: Chỉ giữ lại những hiệu ứng có giá trị > 0
+  // Filter: only show boosts with non-zero values
   const activeBoosts = allPossibleBoosts.filter(b => b.val > 0);
 
   return (
@@ -1040,7 +1054,7 @@ function GridStatsPanel({ grid_stats, main_element }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>Max HP</span>
           <span style={{ color: '#60cc60', fontWeight: 700, fontSize: '1.1rem', fontFamily: 'var(--font-mono)' }}>
-            {Math.round(grid_stats.grid_hp || 0).toLocaleString()}
+            {Math.round(grid_stats.mc_max_hp || grid_stats.grid_hp || 0).toLocaleString()}
           </span>
         </div>
       </div>
