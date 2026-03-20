@@ -9,7 +9,7 @@
 // No time limit.
 // ─────────────────────────────────────────────────────────────────────────────
 import { v4 as uuidv4 } from 'uuid';
-import { BOSSES, CHARACTERS, WEAPONS } from '../data/catalog.js';
+import { BOSSES, CHARACTERS, WEAPONS, MC_CLASSES } from '../data/catalog.js';
 import { calcGridStats, resolvePlayerAction, resolveBossAction, tickAllEffects, checkPhaseTransition } from '../engine/combat.js';
 
 const MAX_PLAYERS = 4;
@@ -36,6 +36,58 @@ function buildCharState(char_def) {
     shield: 0,
   };
 }
+
+// ── BUILD MC CHARACTER STATE ──────────────────────────────────────────────────
+function buildMCState(mc_config, main_weapon_element) {
+  const element = main_weapon_element || mc_config.element || 'FIRE';
+  // Combine preset skill + selected subskills into abilities array
+  const abilities = [];
+  if (mc_config.preset_skill) {
+    abilities.push({
+      id: 'MC_PRESET',
+      name: mc_config.preset_skill.name,
+      description: mc_config.preset_skill.description,
+      cooldown_max: mc_config.preset_skill.cd || 7,
+      effect_type: mc_config.preset_skill.effect_type || 'BUFF',
+      target: 'ENEMY',
+      value: { dmg_multiplier: 2.5 }, // basic fallback
+    });
+  }
+  (mc_config.selected_skills || []).slice(0, 3).forEach((sk, i) => {
+    if (!sk) return;
+    abilities.push({
+      id: `MC_SUB_${i}`,
+      name: sk.name,
+      description: sk.description,
+      cooldown_max: sk.cd || 8,
+      effect_type: sk.effect_type || 'BUFF',
+      target: sk.effect_type === 'HEAL' ? 'ALL_ALLIES' : sk.effect_type === 'DAMAGE' ? 'ENEMY' : 'ALL_ALLIES',
+      value: sk.effect_type === 'HEAL'   ? { heal_amount: 1500 }
+           : sk.effect_type === 'DAMAGE' ? { dmg_multiplier: 2.0 }
+           : { stat: 'ATK', amount: 0.20, duration: 3 },
+    });
+  });
+
+  return {
+    id: 'MC',
+    name: 'Sky-Wanderer',
+    element,
+    type: mc_config.class_name || 'Fighter',
+    base_atk: mc_config.base_atk || 1820,
+    hp: mc_config.base_hp || 1820,
+    hp_max: mc_config.base_hp || 1820,
+    charge_bar: 0,
+    charge_gain_per_turn: 20,
+    abilities,
+    passive: null,
+    charge_attack: mc_config.charge_attack || { name: 'Raging Strike', description: 'Massive elemental DMG.' },
+    ability_cooldowns: {},
+    status_effects: [],
+    shield: 0,
+    is_mc: true,
+  };
+}
+
 
 // ── BUILD RUNTIME BOSS STATE ──────────────────────────────────────────────────
 // Each player gets their own local boss state (charge bar, debuffs, mode bar).
@@ -77,7 +129,7 @@ export function createRoom({ boss_id, creator_id, creator_name }) {
 }
 
 // ── JOIN ROOM ─────────────────────────────────────────────────────────────────
-export function joinRoom({ room_id, player_id, player_name, party_config, grid_config }) {
+export function joinRoom({ room_id, player_id, player_name, party_config, grid_config, mc_config }) {
   const room = rooms.get(room_id);
   if (!room) return { error: 'Room not found' };
   if (room.status === 'VICTORY') return { error: 'Raid already completed' };
@@ -100,9 +152,17 @@ export function joinRoom({ room_id, player_id, player_name, party_config, grid_c
     .filter(Boolean)
     .map(buildCharState);
 
+  // weapons declared BEFORE mc_element (which needs weapons[0])
   const weapons = weapon_ids
     .map(id => WEAPONS.find(w => w.id === id))
     .filter(Boolean);
+
+  // Prepend MC as slot 0 if mc_config provided
+  const mc_element = weapons[0]?.element || characters[0]?.element || 'FIRE';
+  if (mc_config) {
+    const mc_state = buildMCState(mc_config, mc_element);
+    characters.unshift(mc_state);
+  }
 
   const grid_stats = calcGridStats(weapons);
 
@@ -121,9 +181,12 @@ export function joinRoom({ room_id, player_id, player_name, party_config, grid_c
     }
   }
 
-  // MC element from main weapon
-  const mc_element = weapons[0]?.element || characters[0]?.element || 'FIRE';
-  if (characters[0]) characters[0].element = mc_element;
+  // MC element applied during buildMCState above
+  // Apply to first non-MC char if needed
+  if (characters.find(ch => !ch.is_mc)) {
+    const first_char = characters.find(ch => !ch.is_mc);
+    if (first_char) first_char.element = first_char.element || mc_element;
+  }
 
   const player_entry = {
     player_id,
@@ -394,11 +457,20 @@ export function getPlayerSnapshot(player) {
       id: c.id,
       name: c.name,
       element: c.element,
+      type: c.type,
       hp: c.hp,
       hp_max: c.hp_max,
       charge_bar: c.charge_bar,
       status_effects: c.status_effects,
       ability_cooldowns: c.ability_cooldowns,
+      abilities: (c.abilities || []).map(a => ({
+        id: a.id,
+        name: a.name,
+        description: a.description,
+        cooldown_max: a.cooldown_max,
+        effect_type: a.effect_type,
+      })),
+      is_mc: c.is_mc || false,
     })),
     grid_stats: player.grid_stats,
   };
