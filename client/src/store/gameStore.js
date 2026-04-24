@@ -110,6 +110,8 @@ export const useGameStore = create((set, get) => ({
   current_room_id: null,
   raid_state: null,          // full room snapshot (boss HP, all players)
   my_state: null,            // this player's detailed state (characters, local boss, grid_stats)
+  target_id: null,
+  setTargetId: (id) => set({ target_id: id }),
   turn_log: [],
   chain_burst_anim: null,
   phase_anim: null,
@@ -118,7 +120,11 @@ export const useGameStore = create((set, get) => ({
 
   // ── Socket ────────────────────────────────────────────────────────────────────
   initSocket: () => {
-    if (socket?.connected) return;
+    if (socket) {
+      if (!socket.connected) socket.connect();
+      set({ socket_ref: socket });
+      return;
+    }
     socket = io({ transports: ['websocket'] });
 
     socket.on('connect', () => { console.log('[WS] connected'); set({ ws_connected: true }); });
@@ -129,12 +135,17 @@ export const useGameStore = create((set, get) => ({
       set({ raid_state: snapshot });
       // If we're in the snapshot, pull out my_state
       const me = snapshot.players?.find(p => p.player_id === get().player_id);
-      if (me) set({ my_state: me });
+      if (me) set({ my_state: me, target_id: me.target_id || snapshot.boss?.id || null });
     });
 
     socket.on('raid_started', ({ message }) => {
       set({ is_attacking: false });
       get().pushLog({ type: 'SYSTEM', msg: `⚔ ${message}`, ts: ts() });
+    });
+
+    socket.on('opening_log', ({ log }) => {
+      const stamp = ts();
+      for (const ev of (log || [])) get().pushLog({ ...ev, ts: stamp });
     });
 
     socket.on('player_joined', ({ name }) => {
@@ -143,22 +154,38 @@ export const useGameStore = create((set, get) => ({
     });
 
     // ── My skill resolved ──────────────────────────────────────────────────────
-    socket.on('skill_result', ({ log, shared_boss_hp, my_state }) => {
+    socket.on('skill_result', ({ log, shared_boss_hp, entity_hp, my_state }) => {
       const stamp = ts();
       // Update boss HP in raid_state
-      set(s => ({
-        raid_state: s.raid_state ? { ...s.raid_state, boss: { ...s.raid_state.boss, hp: shared_boss_hp } } : s.raid_state,
-        my_state: my_state || s.my_state,
-      }));
+      set(s => {
+        if (!s.raid_state) return { my_state: my_state || s.my_state, target_id: my_state?.target_id ?? s.target_id };
+        const boss = s.raid_state.boss;
+        const nextBossHp = entity_hp && boss?.id && entity_hp[boss.id] != null ? entity_hp[boss.id] : shared_boss_hp;
+        const nextBoss = boss ? { ...boss, hp: nextBossHp } : boss;
+        const nextSubs = (s.raid_state.sub_entities || []).map(se => (
+          entity_hp && entity_hp[se.id] != null ? { ...se, hp: entity_hp[se.id] } : se
+        ));
+        return {
+          raid_state: { ...s.raid_state, boss: nextBoss, sub_entities: nextSubs },
+          my_state: my_state || s.my_state,
+          target_id: my_state?.target_id ?? s.target_id,
+        };
+      });
       for (const ev of log) get().pushLog({ ...ev, ts: stamp });
     });
 
     // ── Another player used a skill ────────────────────────────────────────────
-    socket.on('player_used_skill', ({ player_id, player_name, log, shared_boss_hp }) => {
+    socket.on('player_used_skill', ({ player_id, player_name, log, shared_boss_hp, entity_hp }) => {
       const stamp = ts();
       // Update shared boss HP
       set(s => ({
-        raid_state: s.raid_state ? { ...s.raid_state, boss: { ...s.raid_state.boss, hp: shared_boss_hp } } : s.raid_state,
+        raid_state: s.raid_state ? {
+          ...s.raid_state,
+          boss: { ...s.raid_state.boss, hp: entity_hp && entity_hp[s.raid_state.boss.id] != null ? entity_hp[s.raid_state.boss.id] : shared_boss_hp },
+          sub_entities: (s.raid_state.sub_entities || []).map(se => (
+            entity_hp && entity_hp[se.id] != null ? { ...se, hp: entity_hp[se.id] } : se
+          )),
+        } : s.raid_state,
       }));
       // Log other player's skill with their name prefix
       for (const ev of log) {
@@ -167,12 +194,19 @@ export const useGameStore = create((set, get) => ({
     });
 
     // ── My attack turn resolved ────────────────────────────────────────────────
-    socket.on('turn_result', ({ turn_number, attack_log, boss_log, shared_boss_hp, my_state, player_defeated }) => {
+    socket.on('turn_result', ({ turn_number, attack_log, boss_log, shared_boss_hp, entity_hp, my_state, player_defeated }) => {
       const stamp = ts();
       set(s => ({
         is_attacking: false,
         my_state: my_state || s.my_state,
-        raid_state: s.raid_state ? { ...s.raid_state, boss: { ...s.raid_state.boss, hp: shared_boss_hp } } : s.raid_state,
+        target_id: my_state?.target_id ?? s.target_id,
+        raid_state: s.raid_state ? {
+          ...s.raid_state,
+          boss: { ...s.raid_state.boss, hp: entity_hp && entity_hp[s.raid_state.boss.id] != null ? entity_hp[s.raid_state.boss.id] : shared_boss_hp },
+          sub_entities: (s.raid_state.sub_entities || []).map(se => (
+            entity_hp && entity_hp[se.id] != null ? { ...se, hp: entity_hp[se.id] } : se
+          )),
+        } : s.raid_state,
       }));
 
       get().pushLog({ type: 'TURN_DIVIDER', turn: turn_number, ts: stamp });
@@ -198,10 +232,16 @@ export const useGameStore = create((set, get) => ({
     });
 
     // ── Another player attacked ────────────────────────────────────────────────
-    socket.on('player_attacked', ({ player_id, player_name, attack_log, shared_boss_hp }) => {
+    socket.on('player_attacked', ({ player_id, player_name, attack_log, shared_boss_hp, entity_hp }) => {
       const stamp = ts();
       set(s => ({
-        raid_state: s.raid_state ? { ...s.raid_state, boss: { ...s.raid_state.boss, hp: shared_boss_hp } } : s.raid_state,
+        raid_state: s.raid_state ? {
+          ...s.raid_state,
+          boss: { ...s.raid_state.boss, hp: entity_hp && entity_hp[s.raid_state.boss.id] != null ? entity_hp[s.raid_state.boss.id] : shared_boss_hp },
+          sub_entities: (s.raid_state.sub_entities || []).map(se => (
+            entity_hp && entity_hp[se.id] != null ? { ...se, hp: entity_hp[se.id] } : se
+          )),
+        } : s.raid_state,
       }));
       // Log summary for others (just damage events so log isn't flooded)
       for (const ev of attack_log) {
@@ -234,7 +274,7 @@ export const useGameStore = create((set, get) => ({
     const snap = await fetch(`${API}/raids/${room_id}`).then(r => r.json());
     set({ raid_state: snap });
     const me = snap.players?.find(p => p.player_id === get().player_id);
-    if (me) set({ my_state: me });
+    if (me) set({ my_state: me, target_id: me.target_id || snap.boss?.id || null });
   },
 
   joinRaid: (room_id) => {
@@ -294,7 +334,7 @@ export const useGameStore = create((set, get) => ({
       });
       set({ my_state: { ...state, characters: chars } });
     }
-    socket?.emit('use_skill', { room_id: current_room_id, player_id, char_id, ability_id });
+    socket?.emit('use_skill', { room_id: current_room_id, player_id, char_id, ability_id, target_id: get().target_id });
   },
 
   // Press ATTACK — resolves this player's full turn immediately
@@ -302,7 +342,7 @@ export const useGameStore = create((set, get) => ({
     const { current_room_id, player_id, is_attacking } = get();
     if (is_attacking) return;
     set({ is_attacking: true });
-    socket?.emit('player_attack', { room_id: current_room_id, player_id });
+    socket?.emit('player_attack', { room_id: current_room_id, player_id, target_id: get().target_id });
   },
 
   // Combat log

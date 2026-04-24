@@ -36,6 +36,7 @@ export function BattleScreen() {
     chain_burst_anim, phase_anim, raid_result,
     setScreen, current_room_id, refreshRaidState, catalog_characters,
     catalog_mc_classes, mc_class_id, mc_selected_skills,
+    target_id, setTargetId,
   } = useGameStore();
 
   const [selected_char_id, setSelectedCharId]   = useState(null);
@@ -178,9 +179,11 @@ export function BattleScreen() {
   }
 
   const boss          = raid_state.boss;
+  const sub_entities  = raid_state.sub_entities || [];
   const is_waiting    = raid_state.status==='WAITING';
   const is_active     = raid_state.status==='IN_PROGRESS';
   const my_local_boss = my_state?.local_boss;
+  const my_local_subs = my_state?.local_sub_entities || [];
   const my_chars      = my_state?.characters||[];
   const i_am_defeated = my_chars.length>0 && my_chars.every(c=>c.hp<=0);
   const selected_char     = my_chars.find(c=>c.id===selected_char_id)||null;
@@ -260,7 +263,16 @@ export function BattleScreen() {
       </div>
 
       {/* BOSS SECTION */}
-      <BossSection boss={boss} my_local_boss={my_local_boss} bossRef={bossRef} bossCardRef={bossCardRef} />
+      <BossSection
+        boss={boss}
+        sub_entities={sub_entities}
+        local_main={my_local_boss}
+        local_subs={my_local_subs}
+        target_id={target_id || boss.id}
+        onSelectTarget={setTargetId}
+        bossRef={bossRef}
+        bossCardRef={bossCardRef}
+      />
 
       {/* BOTTOM SPLIT */}
       <div style={{flex:1,display:'grid',gridTemplateColumns:'1fr 2fr',overflow:'hidden',minHeight:0}}>
@@ -359,10 +371,17 @@ export function BattleScreen() {
 // ═══════════════════════════════════════════════════════════════════════
 // BOSS SECTION
 // ═══════════════════════════════════════════════════════════════════════
-function BossSection({ boss, my_local_boss, bossRef, bossCardRef }) {
+function BossSection({ boss, sub_entities, local_main, local_subs, target_id, onSelectTarget, bossRef, bossCardRef }) {
   if (!boss) return null;
-  const rage  = my_local_boss?.charge_bar??0;
-  const phase = my_local_boss?.current_phase??1;
+  const entities = [boss, ...(sub_entities || [])];
+  const localById = new Map([
+    [boss.id, local_main],
+    ...((local_subs || []).map(s => [s.id, s])),
+  ]);
+  const selected = entities.find(e => e.id === target_id) || boss;
+  const localSel = localById.get(selected.id);
+  const rage  = localSel?.charge_bar??0;
+  const phase = localSel?.current_phase??1;
   return (
     <div ref={bossRef} style={{flexShrink:0,padding:'10px 16px',
       background:'linear-gradient(135deg,rgba(80,0,0,0.25) 0%,rgba(4,8,18,0) 60%)',
@@ -375,17 +394,34 @@ function BossSection({ boss, my_local_boss, bossRef, bossCardRef }) {
           display:'flex',alignItems:'center',justifyContent:'center',fontSize:'2.5rem',
         }}>🐉</div>
         <div style={{flex:1,minWidth:0}}>
+          {entities.length > 1 && (
+            <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:6}}>
+              {entities.map(e => {
+                const active = e.id === selected.id;
+                return (
+                  <button
+                    key={e.id}
+                    className={active ? 'btn btn-primary btn-sm' : 'btn btn-ghost btn-sm'}
+                    style={{padding:'3px 8px',fontSize:'0.6rem'}}
+                    onClick={() => onSelectTarget(e.id)}
+                  >
+                    {e.name}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
-            <span style={{fontFamily:'var(--font-display)',fontSize:'1.1rem',fontWeight:900,color:'var(--hp-red)'}}>{boss.name}</span>
-            <ElementBadge element={boss.element}/>
+            <span style={{fontFamily:'var(--font-display)',fontSize:'1.1rem',fontWeight:900,color:'var(--hp-red)'}}>{selected.name}</span>
+            <ElementBadge element={selected.element}/>
             <span style={{fontSize:'0.62rem',color:'var(--text-dim)',fontFamily:'var(--font-mono)'}}>Phase {phase}</span>
             <span style={{fontSize:'0.62rem',color:'var(--text-dim)',fontFamily:'var(--font-mono)',marginLeft:'auto'}}>SHARED HP</span>
             <span style={{fontFamily:'var(--font-mono)',fontSize:'0.88rem',fontWeight:700,color:'var(--hp-red)'}}>
-              {formatNumber(boss.hp)}<span style={{color:'var(--text-dim)',fontSize:'0.65rem'}}> / {formatNumber(boss.hp_max)}</span>
+              {formatNumber(selected.hp)}<span style={{color:'var(--text-dim)',fontSize:'0.65rem'}}> / {formatNumber(selected.hp_max)}</span>
             </span>
-            <span style={{fontSize:'0.62rem',color:'var(--text-dim)',fontFamily:'var(--font-mono)'}}>{(boss.hp/boss.hp_max*100).toFixed(1)}%</span>
+            <span style={{fontSize:'0.62rem',color:'var(--text-dim)',fontFamily:'var(--font-mono)'}}>{(selected.hp/selected.hp_max*100).toFixed(1)}%</span>
           </div>
-          <div style={{marginBottom:6}}><BossHpBar current={boss.hp} max={boss.hp_max}/></div>
+          <div style={{marginBottom:6}}><BossHpBar current={selected.hp} max={selected.hp_max}/></div>
           <div style={{display:'flex',alignItems:'center',gap:10}}>
             <span style={{fontSize:'0.58rem',color:'var(--hp-red)',fontFamily:'var(--font-mono)',flexShrink:0}}>RAGE</span>
             {[0,1,2].map(i=>(
@@ -403,7 +439,7 @@ function BossSection({ boss, my_local_boss, bossRef, bossCardRef }) {
               </div>
             </div>
             <span style={{fontSize:'0.58rem',color:'var(--hp-red)',fontFamily:'var(--font-mono)'}}>{rage}%</span>
-            {my_local_boss?.status_effects?.length>0&&<StatusEffectList effects={my_local_boss.status_effects}/>}
+            {localSel?.status_effects?.length>0&&<StatusEffectList effects={localSel.status_effects}/>}
           </div>
         </div>
       </div>

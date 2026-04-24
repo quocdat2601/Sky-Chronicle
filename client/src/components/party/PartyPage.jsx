@@ -385,7 +385,7 @@ function ClassCard({ cl, active, onSelect }) {
 // automatically so user can pick a replacement.
 // ─────────────────────────────────────────────────────────────────────────────
 function HeaderBanner({ main_ids, getChar, total_hp, total_atk, main_element,
-                        party_complete, selected_slot, mc_class,
+                        party_complete, selected_slot, mc_class, grid_stats,
                         mc_selected_skills, onSetSelectedSkills,
                         onHeaderSlotTap, onRemoveSlot, onOpenClassModal }) {
   const is_swap_mode = selected_slot !== null;
@@ -396,6 +396,11 @@ function HeaderBanner({ main_ids, getChar, total_hp, total_atk, main_element,
   const [drawer_open, setDrawerOpen] = useState(false);
 
   const role_clr = mc_class ? (ROLE_CLR[mc_class.role] || 'var(--gold-dim)') : 'var(--gold-dim)';
+
+  const grid_atk    = grid_stats?.grid_atk || 0;
+  const grid_hp_val = grid_stats?.grid_hp  || 0;
+  const boostedAtk = (base) => base + grid_atk;
+  const boostedHp  = (base) => base + grid_hp_val;
 
   const subskills = [0,1,2].map(i => (mc_selected_skills || [])[i] || null);
   const selected_names = subskills.filter(Boolean).map(s => s.name);

@@ -405,9 +405,27 @@ export function updateChargeBar(char_state, base_gain, charge_speed_bonus) {
   return char_state.charge_bar >= 100;
 }
 
+function applyBossDamage(boss_state, raw_damage) {
+  const incoming = Math.max(0, Math.floor(raw_damage || 0));
+  const cap = boss_state.damage_cap;
+  const prev = boss_state.turn_damage_taken || 0;
+  let dealt = incoming;
+  if (cap?.active && Number.isFinite(cap.per_turn_cap)) {
+    const remaining = Math.max(0, cap.per_turn_cap - prev);
+    dealt = Math.min(dealt, remaining);
+    if (dealt < incoming) boss_state.did_cap_damage = true;
+  }
+  boss_state.turn_damage_taken = prev + dealt;
+  boss_state.hp = Math.max(0, boss_state.hp - dealt);
+  return dealt;
+}
+
 // ── RESOLVE PLAYER TURN ───────────────────────────────────────────────────────
 export function resolvePlayerAction({ action, player_state, boss_state, grid_stats, weapons }) {
   const log = [];
+  const target_id = action.target_id || boss_state.id;
+  boss_state.turn_damage_taken = 0;
+  boss_state.did_cap_damage = false;
 
   if (action.type === 'GUARD') {
     player_state.guarding = true;
@@ -453,13 +471,14 @@ export function resolvePlayerAction({ action, player_state, boss_state, grid_sta
           defender:       defender_ctx,
           dmg_multiplier: 1.0,
         });
-        boss_state.hp = Math.max(0, boss_state.hp - result.damage);
-        total_hit_damage += result.damage;
+        const dealt = applyBossDamage(boss_state, result.damage);
+        total_hit_damage += dealt;
         hit_results.push({
-          damage:      result.damage,
+          damage:      dealt,
           base_damage: result.base_damage,
           supp_damage: result.supp_damage,
           is_crit:     result.is_crit,
+          element:     attacker_ctx.element,
         });
       }
 
@@ -467,12 +486,14 @@ export function resolvePlayerAction({ action, player_state, boss_state, grid_sta
         type:      'NORMAL_ATTACK',
         char_id:   char.id,
         char_name: char.name,
+        target_id,
         hit_type,
         hit_count,
         hit_results,
         damage:    total_hit_damage,
         is_crit:   hit_results.some(h => h.is_crit),
         has_supp:  hit_results.some(h => h.supp_damage > 0),
+        element:   attacker_ctx.element,
       });
 
       const ca_ready = updateChargeBar(char, char.charge_gain_per_turn, grid_stats.charge_speed_bonus);
@@ -491,18 +512,20 @@ export function resolvePlayerAction({ action, player_state, boss_state, grid_sta
         dmg_multiplier: ca_def.value.dmg_multiplier,
         is_ca:          true,
       });
-      boss_state.hp = Math.max(0, boss_state.hp - ca_result.damage);
+      const dealt = applyBossDamage(boss_state, ca_result.damage);
       char.charge_bar = 0;
-      ca_damages.push({ char_id: char.id, char_name: char.name, damage: ca_result.damage });
+      ca_damages.push({ char_id: char.id, char_name: char.name, damage: dealt, element: char.element });
       log.push({
         type:        'CHARGE_ATTACK',
         char_id:     char.id,
         char_name:   char.name,
         ca_name:     ca_def.name,
-        damage:      ca_result.damage,
+        target_id,
+        damage:      dealt,
         base_damage: ca_result.base_damage,
         supp_damage: ca_result.supp_damage,
         is_crit:     ca_result.is_crit,
+        element:     char.element,
       });
 
       if (ca_def.value.buff) {
@@ -516,8 +539,8 @@ export function resolvePlayerAction({ action, player_state, boss_state, grid_sta
       const bonuses    = { 2: 0.25, 3: 0.50, 4: 1.00 };
       const bonus_pct  = bonuses[chain_count] || 0;
       const cb_bonus   = Math.floor(ca_damages.reduce((s, c) => s + c.damage, 0) * bonus_pct);
-      boss_state.hp = Math.max(0, boss_state.hp - cb_bonus);
-      log.push({ type: 'CHAIN_BURST', chain_count, bonus_pct, cb_bonus, participants: ca_triggered.map(c => c.name) });
+      const dealt = applyBossDamage(boss_state, cb_bonus);
+      log.push({ type: 'CHAIN_BURST', target_id, chain_count, bonus_pct, cb_bonus: dealt, participants: ca_triggered.map(c => c.name) });
     }
   }
 
@@ -547,8 +570,8 @@ export function resolvePlayerAction({ action, player_state, boss_state, grid_sta
         is_skill:       true,
         skill_multiplier_for_cap: ability.value.dmg_multiplier,
       });
-      boss_state.hp = Math.max(0, boss_state.hp - result.damage);
-      log.push({ type: 'ABILITY', char_name: char.name, ability_name: ability.name, damage: result.damage, is_crit: result.is_crit });
+      const dealt = applyBossDamage(boss_state, result.damage);
+      log.push({ type: 'ABILITY', char_id: char.id, char_name: char.name, target_id, ability_name: ability.name, damage: dealt, is_crit: result.is_crit, element: char.element });
 
       if (ability.value.debuff) { applyStatusEffect(boss_state, ability.value.debuff); log.push({ type: 'DEBUFF_APPLIED', effect: ability.value.debuff, target: 'boss' }); }
       if (ability.value.status) { applyStatusEffect(boss_state, ability.value.status); log.push({ type: 'STATUS_APPLIED', effect: ability.value.status, target: 'boss' }); }
@@ -575,15 +598,229 @@ export function resolvePlayerAction({ action, player_state, boss_state, grid_sta
     }
   }
 
+  if (boss_state.did_cap_damage) {
+    log.push({ type: 'DAMAGE_CAPPED', target_id, cap: boss_state.damage_cap?.per_turn_cap, dealt: boss_state.turn_damage_taken });
+  }
+
   return { log, player_state, boss_state };
+}
+
+const RANDOM_ELEMS = ['FIRE', 'WATER', 'EARTH', 'WIND', 'LIGHT', 'DARK'];
+
+function pickElem(e) {
+  if (!e || e === 'RANDOM') return RANDOM_ELEMS[Math.floor(Math.random() * RANDOM_ELEMS.length)];
+  return e;
+}
+
+function removeAllBuffsFromChar(char) {
+  const effects = char.status_effects || [];
+  char.status_effects = effects.filter(e => {
+    if (typeof e.amount === 'number' && e.amount > 0) return false;
+    if (typeof e.type === 'string' && (e.type.endsWith('_UP') || e.type === 'REGEN')) return false;
+    return true;
+  });
+}
+
+function clearDebuffsFromBoss(boss_state) {
+  const effects = boss_state.status_effects || [];
+  boss_state.status_effects = effects.filter(e => {
+    if (typeof e.amount === 'number' && e.amount < 0) return false;
+    if (typeof e.type === 'string' && e.type.endsWith('_DOWN')) return false;
+    if (typeof e.type === 'string' && ['BURN','POISON','BLIND','SLOW','PETRIFIED','WEAKENED','SLASHED'].includes(e.type)) return false;
+    return true;
+  });
+}
+
+function dealBossHit({ boss_def, boss_state, ps, char, raw_damage, is_plain = false, element = null }) {
+  const pre = char.hp;
+  let dmg = Math.max(0, Math.floor(raw_damage || 0));
+  if (!is_plain) {
+    const guard_mult = ps.guarding ? 0.5 : 1.0;
+    dmg = Math.max(0, Math.floor(dmg * guard_mult));
+  }
+  const shield = char.shield || 0;
+  if (shield > 0) {
+    const absorbed = Math.min(shield, dmg);
+    char.shield = shield - absorbed;
+    dmg -= absorbed;
+  }
+  char.hp = Math.max(0, char.hp - dmg);
+  const ko = pre > 0 && char.hp <= 0;
+  return { damage: dmg, ko, element: element ?? boss_def.element };
+}
+
+function pickTargetChar(ps, rule) {
+  const alive = ps.characters.filter(c => c.hp > 0);
+  if (alive.length === 0) return null;
+  if (rule === 'HIGHEST_ATK_ALLY') return alive.slice().sort((a, b) => (b.base_atk || 0) - (a.base_atk || 0))[0];
+  return alive[Math.floor(Math.random() * alive.length)];
+}
+
+function execBossScriptAction({ boss_def, boss_state, all_player_states, action, log }) {
+  let ko_count = 0;
+  let used_special = false;
+  if (!action) return { ko_count, used_special };
+
+  if (action.type === 'MULTI') {
+    for (const a of (action.actions || [])) {
+      const r = execBossScriptAction({ boss_def, boss_state, all_player_states, action: a, log });
+      ko_count += r.ko_count;
+      used_special = used_special || r.used_special;
+    }
+    return { ko_count, used_special };
+  }
+
+  if (action.type === 'FILL_CHARGE_BAR') {
+    boss_state.charge_bar = 100;
+    used_special = true;
+    return { ko_count, used_special };
+  }
+
+  if (action.type === 'BOSS_BUFF') {
+    applyStatusEffect(boss_state, { type: action.buff, duration: action.duration ?? 999 });
+    used_special = true;
+    return { ko_count, used_special };
+  }
+
+  if (action.type === 'CLEAR_DEBUFFS_ON_SELF') {
+    clearDebuffsFromBoss(boss_state);
+    used_special = true;
+    return { ko_count, used_special };
+  }
+
+  if (action.type === 'SELF_BUFF' && action.effect === 'CHANGE_NORMAL_ATTACK') {
+    boss_state.normal_attack_override = action.new_attack || null;
+    used_special = true;
+    return { ko_count, used_special };
+  }
+
+  if (action.type === 'ACTIVATE_CONDITIONAL_BUFFS') {
+    const ids = new Set(action.buff_ids || []);
+    const buffs = boss_state.conditional_buffs || [];
+    boss_state.conditional_buffs = buffs.map(b => ids.has(b.id) ? { ...b, active: true } : b);
+    used_special = true;
+    return { ko_count, used_special };
+  }
+
+  if (action.type === 'ATTACK_ALL' || action.type === 'CA_FIRE') {
+    used_special = true;
+    const is_plain = Number.isFinite(action.plain_damage) && action.plain_damage > 0;
+    for (const ps of all_player_states) {
+      for (const char of ps.characters) {
+        if (char.hp <= 0) continue;
+        const base = is_plain ? action.plain_damage : (action.random_elem_damage ?? 0);
+        const element = is_plain ? null : pickElem('RANDOM');
+        const hit = dealBossHit({ boss_def, boss_state, ps, char, raw_damage: base, is_plain, element });
+        log.push({ type: 'BOSS_CA_HIT', source_id: boss_state.id, target: char.name, damage: hit.damage, element: hit.element });
+        if (hit.ko) { ko_count++; log.push({ type: 'ALLY_KO', source_id: boss_state.id, target: char.name }); }
+      }
+      ps.guarding = false;
+    }
+    return { ko_count, used_special };
+  }
+
+  if (action.type === 'ATTACK_SINGLE') {
+    used_special = true;
+    const ps = all_player_states[0];
+    const char = pickTargetChar(ps, action.target);
+    if (!char) return { ko_count, used_special };
+    const is_plain = Number.isFinite(action.plain_damage) && action.plain_damage > 0;
+    const base = is_plain ? action.plain_damage : (action.random_elem_damage ?? 0);
+    const element = is_plain ? null : pickElem('RANDOM');
+    const hit = dealBossHit({ boss_def, boss_state, ps, char, raw_damage: base, is_plain, element });
+    log.push({ type: 'BOSS_ATTACK', source_id: boss_state.id, target_char: char.name, damage: hit.damage, element: hit.element, special: true });
+    if (hit.ko) { ko_count++; log.push({ type: 'ALLY_KO', source_id: boss_state.id, target: char.name }); }
+    if (action.effect?.type === 'REMOVE_ALL_BUFFS') {
+      removeAllBuffsFromChar(char);
+      log.push({ type: 'BUFFS_REMOVED', target: char.name });
+    }
+    ps.guarding = false;
+    return { ko_count, used_special };
+  }
+
+  if (action.type === 'ATTACK_RANDOM') {
+    used_special = true;
+    const hits = action.hits || 1;
+    const ps = all_player_states[0];
+    for (let i = 0; i < hits; i++) {
+      const char = pickTargetChar(ps, 'RANDOM');
+      if (!char) break;
+      const is_plain = Number.isFinite(action.plain_damage) && action.plain_damage > 0;
+      const base = is_plain ? action.plain_damage : (action.random_elem_damage ?? 0);
+      const element = is_plain ? null : pickElem('RANDOM');
+      const hit = dealBossHit({ boss_def, boss_state, ps, char, raw_damage: base, is_plain, element });
+      log.push({ type: 'BOSS_ATTACK', source_id: boss_state.id, target_char: char.name, damage: hit.damage, element: hit.element, special: true });
+      if (hit.ko) { ko_count++; log.push({ type: 'ALLY_KO', source_id: boss_state.id, target: char.name }); }
+      const effs = Array.isArray(action.effect) ? action.effect : (action.effect ? [action.effect] : []);
+      for (const eff of effs) {
+        if (eff?.type === 'DEBUFF') {
+          applyStatusEffect(char, { type: eff.stat, amount: eff.amount, duration: eff.duration ?? 1 });
+        }
+      }
+    }
+    ps.guarding = false;
+    return { ko_count, used_special };
+  }
+
+  if (action.type === 'KO_DUPLICATE_RACE') {
+    used_special = true;
+    const ps = all_player_states[0];
+    const alive = ps.characters.filter(c => c.hp > 0);
+    const seen = new Set();
+    for (const char of alive) {
+      const key = char.type || 'UNKNOWN';
+      if (seen.has(key)) {
+        char.hp = 0;
+        ko_count++;
+        log.push({ type: 'ALLY_KO', source_id: boss_state.id, target: char.name });
+      } else {
+        seen.add(key);
+      }
+    }
+    ps.guarding = false;
+    return { ko_count, used_special };
+  }
+
+  return { ko_count, used_special };
+}
+
+export function resolveBossOnEnter({ boss_def, boss_state, on_enter, all_player_states }) {
+  const log = [];
+  execBossScriptAction({ boss_def, boss_state, all_player_states, action: on_enter, log });
+  return { log, boss_state, all_player_states };
 }
 
 // ── RESOLVE BOSS ACTION ───────────────────────────────────────────────────────
 export function resolveBossAction({ boss_def, boss_state, all_player_states }) {
   const log = [];
 
+  const conds = (boss_state.conditional_buffs || []).filter(b => b.active);
+  for (const b of conds) {
+    const eff = b.effect;
+    if (!eff) continue;
+    if (eff.type === 'TURN_START_DEBUFF' && eff.action === 'REMOVE_BUFF') {
+      for (const ps of all_player_states) {
+        for (const char of ps.characters) {
+          if (char.hp <= 0) continue;
+          for (let i = 0; i < (eff.count || 0); i++) removeAllBuffsFromChar(char);
+        }
+      }
+      log.push({ type: 'LABOR_EFFECT', labor_id: b.id, effect: eff.type });
+    }
+    if (eff.type === 'TURN_START_DAMAGE') {
+      const ps = all_player_states[0];
+      const char = pickTargetChar(ps, 'RANDOM');
+      if (char) {
+        const hit = dealBossHit({ boss_def, boss_state, ps, char, raw_damage: eff.damage || 0, is_plain: !!eff.is_plain, element: null });
+        log.push({ type: 'BOSS_ATTACK', source_id: boss_state.id, target_char: char.name, damage: hit.damage, element: 'PLAIN', special: true });
+        if (hit.ko) log.push({ type: 'ALLY_KO', source_id: boss_state.id, target: char.name });
+      }
+      log.push({ type: 'LABOR_EFFECT', labor_id: b.id, effect: eff.type });
+    }
+  }
+
   const phase = boss_def.phases.findLast(p => (boss_state.hp / boss_def.hp_max) <= p.hp_threshold) || boss_def.phases[0];
-  const atk_pattern = phase.normal_attack;
+  const atk_pattern = boss_state.normal_attack_override || phase.normal_attack;
   const total_party_atk = boss_state.atk_up_mod || 1.0;
 
   for (const ps of all_player_states) {
@@ -591,16 +828,10 @@ export function resolveBossAction({ boss_def, boss_state, all_player_states }) {
       if (char.hp <= 0) continue;
       for (let h = 0; h < (atk_pattern.hits || 1); h++) {
         const raw          = boss_def.base_atk * total_party_atk * (atk_pattern.dmg_multiplier || 1.0);
-        const guard_mult   = ps.guarding ? 0.5 : 1.0;
-        const shield       = char.shield || 0;
-        let dmg = Math.max(0, Math.floor(raw * guard_mult));
-        if (shield > 0) {
-          const absorbed = Math.min(shield, dmg);
-          char.shield    = shield - absorbed;
-          dmg           -= absorbed;
-        }
-        char.hp = Math.max(0, char.hp - dmg);
-        log.push({ type: 'BOSS_ATTACK', target_char: char.name, damage: dmg });
+        const element = pickElem(atk_pattern.element || boss_def.element);
+        const hit = dealBossHit({ boss_def, boss_state, ps, char, raw_damage: raw, is_plain: false, element });
+        log.push({ type: 'BOSS_ATTACK', source_id: boss_state.id, target_char: char.name, damage: hit.damage, element: hit.element });
+        if (hit.ko) log.push({ type: 'ALLY_KO', source_id: boss_state.id, target: char.name });
         if (atk_pattern.effect) { applyStatusEffect(char, atk_pattern.effect); log.push({ type: 'STATUS_APPLIED', effect: atk_pattern.effect, target: char.name }); }
       }
     }
@@ -610,34 +841,43 @@ export function resolveBossAction({ boss_def, boss_state, all_player_states }) {
   boss_state.charge_bar = (boss_state.charge_bar || 0) + boss_def.charge_gain_per_turn;
   if (boss_state.charge_bar >= 100) {
     boss_state.charge_bar = 0;
+    boss_state.broken_turns = 1;
     const ca = phase.charge_attack;
     log.push({ type: 'BOSS_CHARGE_ATTACK', ca_name: ca.name, description: `${boss_def.name} unleashes ${ca.name}!` });
     for (const ps of all_player_states) {
       for (const char of ps.characters) {
         if (char.hp <= 0) continue;
-        const dmg = Math.floor(boss_def.base_atk * (ca.dmg_multiplier || 3.0));
-        char.hp = Math.max(0, char.hp - dmg);
-        log.push({ type: 'BOSS_CA_HIT', target: char.name, damage: dmg });
+        const is_plain = !!ca.is_plain || (Number.isFinite(ca.plain_damage) && ca.plain_damage > 0);
+        const base = is_plain
+          ? (ca.plain_damage ?? Math.floor(boss_def.base_atk * (ca.dmg_multiplier || 3.0)))
+          : (ca.random_elem_damage ?? Math.floor(boss_def.base_atk * (ca.dmg_multiplier || 3.0)));
+        const element = is_plain ? null : pickElem(ca.element || 'RANDOM');
+        const hit = dealBossHit({ boss_def, boss_state, ps, char, raw_damage: base, is_plain, element });
+        log.push({ type: 'BOSS_CA_HIT', source_id: boss_state.id, target: char.name, damage: hit.damage, element: hit.element });
+        if (hit.ko) log.push({ type: 'ALLY_KO', source_id: boss_state.id, target: char.name });
       }
       if (ca.effect) applyStatusEffect(ps, ca.effect);
     }
   }
 
   const hp_pct = boss_state.hp / boss_def.hp_max;
-  for (const trigger of (boss_def.triggers || [])) {
+  const triggers = boss_state.triggers || boss_def.triggers || [];
+  for (const trigger of triggers) {
     if (!trigger.fired && hp_pct <= trigger.hp_pct) {
       trigger.fired = true;
       log.push({ type: 'TRIGGER', name: trigger.name, description: trigger.description });
-      if (trigger.action.type === 'BUFF_SELF') {
-        boss_state.atk_up_mod = (boss_state.atk_up_mod || 1.0) + trigger.action.amount;
-      }
-      if (trigger.action.type === 'DEBUFF') {
+      if (trigger.action?.type === 'BUFF_SELF') boss_state.atk_up_mod = (boss_state.atk_up_mod || 1.0) + trigger.action.amount;
+      if (trigger.action?.type === 'DEBUFF') {
         for (const ps of all_player_states)
           for (const char of ps.characters)
             applyStatusEffect(char, { type: trigger.action.stat + '_DOWN', amount: trigger.action.amount, duration: trigger.action.duration });
+      } else {
+        execBossScriptAction({ boss_def, boss_state, all_player_states, action: trigger.action, log });
       }
     }
   }
+
+  if (boss_state.broken_turns > 0 && (boss_state.charge_bar || 0) > 0) boss_state.broken_turns = Math.max(0, boss_state.broken_turns - 1);
 
   return { log, boss_state, all_player_states };
 }

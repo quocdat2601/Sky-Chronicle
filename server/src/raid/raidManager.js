@@ -10,7 +10,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { v4 as uuidv4 } from 'uuid';
 import { BOSSES, CHARACTERS, WEAPONS, MC_CLASSES } from '../data/catalog.js';
-import { calcGridStats, resolvePlayerAction, resolveBossAction, tickAllEffects, checkPhaseTransition } from '../engine/combat.js';
+import { calcGridStats, resolvePlayerAction, resolveBossAction, resolveBossOnEnter, tickAllEffects, checkPhaseTransition } from '../engine/combat.js';
 
 const MAX_PLAYERS = 4;
 // Rooms are purged after these TTLs to prevent unbounded memory growth
@@ -117,9 +117,41 @@ function buildBossLocalState(boss_def) {
     current_phase_idx: 0,
     status_effects: [],
     atk_up_mod: 1.0,
-    // triggers are per-player too (fired independently)
-    triggers: boss_def.triggers.map(t => ({ ...t, fired: false })),
+    broken_turns: 0,
   };
+}
+
+function buildEntityDefs(boss_def) {
+  return [boss_def, ...((boss_def.sub_entities || []).map(se => ({ ...se })))];
+}
+
+function cloneTriggers(entity_def) {
+  return (entity_def.triggers || []).map(t => ({ ...t, fired: false }));
+}
+
+function cloneBossMeta(entity_def) {
+  const meta = {};
+  if (entity_def.passive_stacks) meta.passive_stacks = { ...entity_def.passive_stacks };
+  if (entity_def.conditional_buffs) meta.conditional_buffs = entity_def.conditional_buffs.map(b => ({ ...b }));
+  if (entity_def.countdown) meta.countdown = { ...entity_def.countdown };
+  if (entity_def.damage_cap) meta.damage_cap = { ...entity_def.damage_cap };
+  if (entity_def.field_on_join) meta.field_on_join = entity_def.field_on_join.map(e => ({ ...e }));
+  meta.phase_entered = {};
+  return meta;
+}
+
+function isLuciliusMain(entity_def) {
+  return entity_def.id === 'BOSS003';
+}
+
+function applySubEntityOnDeath(room, entity_def, log) {
+  const on_death = entity_def.on_death;
+  if (!on_death) return;
+  if (on_death.type === 'REMOVE_BOSS_BUFF' && on_death.target === 'BOSS003' && on_death.buff_name === 'Wings of the Word') {
+    const meta = room.entity_meta?.BOSS003;
+    if (meta?.damage_cap) meta.damage_cap.active = false;
+    log?.push({ type: 'SYSTEM', msg: on_death.description || 'A boss buff was removed.' });
+  }
 }
 
 // ── CREATE ROOM ───────────────────────────────────────────────────────────────
@@ -128,13 +160,23 @@ export function createRoom({ boss_id, creator_id, creator_name }) {
   if (!boss_def) throw new Error(`Boss ${boss_id} not found`);
 
   const room_id = uuidv4().slice(0, 8).toUpperCase();
+  const entity_defs = buildEntityDefs(boss_def);
 
   const room = {
     room_id,
     boss_def,
-    // Shared boss HP pool — all players damage this
-    shared_boss_hp: boss_def.hp_max,
-    shared_boss_hp_max: boss_def.hp_max,
+    entities: Object.fromEntries(entity_defs.map(def => [def.id, {
+      id: def.id,
+      name: def.name,
+      element: def.element,
+      hp: def.hp_max,
+      hp_max: def.hp_max,
+      def: def.def,
+    }])),
+    entity_defs: Object.fromEntries(entity_defs.map(def => [def.id, def])),
+    entity_triggers: Object.fromEntries(entity_defs.map(def => [def.id, cloneTriggers(def)])),
+    entity_meta: Object.fromEntries(entity_defs.map(def => [def.id, cloneBossMeta(def)])),
+    dead_entities: {},
     players: [],
     status: 'WAITING', // WAITING | IN_PROGRESS | VICTORY
     combat_log: [],
@@ -209,7 +251,10 @@ export function joinRoom({ room_id, player_id, player_name, party_config, grid_c
     weapons,
     grid_stats,
     // Each player has their own local boss state
-    local_boss: buildBossLocalState(room.boss_def),
+    local_boss: Object.fromEntries(Object.keys(room.entities).map(eid => [eid, buildBossLocalState(room.entity_defs[eid])])),
+    main_boss_id: room.boss_def.id,
+    target_id: room.boss_def.id,
+    join_effect_applied: false,
     turn_number: 0,
     is_ready: false,
     honors: 0,
@@ -232,28 +277,46 @@ export function setPlayerReady(room_id, player_id) {
   if (player) player.is_ready = true;
 
   const alive = room.players.filter(p => !p.disconnected);
+  let opening_log = null;
   if (alive.length > 0 && alive.every(p => p.is_ready)) {
     room.status = 'IN_PROGRESS';
     console.log(`[Raid] Room ${room_id} — RAID STARTED!`);
+    if (room.boss_def.id === 'BOSS003' && !room.opening_done) {
+      room.opening_done = true;
+      opening_log = [];
+      opening_log.push({ type: 'BOSS_CHARGE_ATTACK', source_id: 'BOSS003', ca_name: 'Paradise Lost', description: `${room.boss_def.name} unleashes Paradise Lost!` });
+      for (const ps of alive) {
+        for (const char of ps.characters) {
+          if (char.hp <= 0) continue;
+          const before = char.hp;
+          const applied = 30000;
+          char.hp = Math.max(0, char.hp - applied);
+          const dealt = before - char.hp;
+          opening_log.push({ type: 'BOSS_CA_HIT', source_id: 'BOSS003', target: char.name, damage: dealt, element: 'PLAIN' });
+          if (before > 0 && char.hp <= 0) opening_log.push({ type: 'ALLY_KO', source_id: 'BOSS003', target: char.name });
+        }
+      }
+    }
   }
-  return room;
+  return { room, opening_log };
 }
 
 // ── USE SKILL (instant, pre-attack) ──────────────────────────────────────────
 // Resolves immediately against player's local boss state.
 // Returns log events to broadcast to all players.
-export function useSkill(room_id, player_id, char_id, ability_id) {
+export function useSkill(room_id, player_id, char_id, ability_id, target_id_arg = null) {
   const room = rooms.get(room_id);
   if (!room || room.status !== 'IN_PROGRESS') return { error: 'Raid not active' };
 
   const player = room.players.find(p => p.player_id === player_id);
   if (!player || player.disconnected) return { error: 'Player not in room' };
 
-  // Build a temporary boss object for combat engine (local boss state + shared HP)
-  const boss_ctx = buildBossContext(room, player);
+  const target_id = target_id_arg || player.target_id || room.boss_def.id;
+  player.target_id = target_id;
+  const boss_ctx = buildBossContext(room, player, target_id);
 
   const result = resolvePlayerAction({
-    action: { type: 'USE_ABILITY', char_id, ability_id },
+    action: { type: 'USE_ABILITY', char_id, ability_id, target_id },
     player_state: player,
     boss_state: boss_ctx,
     grid_stats: player.grid_stats,
@@ -264,23 +327,14 @@ export function useSkill(room_id, player_id, char_id, ability_id) {
     return { error: result.log.find(e => e.type === 'ERROR').msg };
   }
 
-  // Write back local boss state changes (debuffs, charge bar changes from delay)
   syncBossContext(room, player, boss_ctx);
-
-  // Damage from skills goes to shared HP
-  const skill_dmg = result.log
-    .filter(e => e.type === 'ABILITY' && e.damage)
-    .reduce((s, e) => s + e.damage, 0);
-  if (skill_dmg > 0) {
-    room.shared_boss_hp = Math.max(0, room.shared_boss_hp - skill_dmg);
-  }
 
   // Stash the log to include in the next ATTACK broadcast
   if (!player.pending_skill_log) player.pending_skill_log = [];
   player.pending_skill_log.push(...result.log);
 
   // Check victory from skill damage
-  if (room.shared_boss_hp <= 0) {
+  if (room.entities[room.boss_def.id].hp <= 0) {
     room.status = 'VICTORY';
     buildRewards(room);
   }
@@ -288,14 +342,15 @@ export function useSkill(room_id, player_id, char_id, ability_id) {
   return {
     ok: true,
     log: result.log,
-    shared_boss_hp: room.shared_boss_hp,
+    shared_boss_hp: room.entities[room.boss_def.id].hp,
+    entity_hp: Object.fromEntries(Object.entries(room.entities).map(([id, e]) => [id, e.hp])),
     victory: room.status === 'VICTORY',
     rewards: room.rewards || null,
   };
 }
 
 // ── ATTACK (ends the turn for this player) ───────────────────────────────────
-export function playerAttack(room_id, player_id) {
+export function playerAttack(room_id, player_id, target_id_arg = null) {
   const room = rooms.get(room_id);
   if (!room || room.status !== 'IN_PROGRESS') return { error: 'Raid not active' };
 
@@ -304,28 +359,80 @@ export function playerAttack(room_id, player_id) {
 
   player.turn_number++;
 
-  const boss_ctx = buildBossContext(room, player);
+  const target_id = target_id_arg || player.target_id || room.boss_def.id;
+  player.target_id = target_id;
+  const boss_ctx = buildBossContext(room, player, target_id);
 
   // Resolve normal attacks + CA + chain burst
   const result = resolvePlayerAction({
-    action: { type: 'ATTACK' },
+    action: { type: 'ATTACK', target_id },
     player_state: player,
     boss_state: boss_ctx,
     grid_stats: player.grid_stats,
     weapons: player.weapons,
   });
 
-  // Damage to shared HP
-  const atk_dmg = result.log
-    .filter(e => ['NORMAL_ATTACK','CHARGE_ATTACK','CHAIN_BURST'].includes(e.type))
-    .reduce((s, e) => s + (e.damage || e.cb_bonus || 0), 0);
-  room.shared_boss_hp = Math.max(0, room.shared_boss_hp - atk_dmg);
-
   // Write back local boss state
   syncBossContext(room, player, boss_ctx);
 
+  const luci_meta2 = room.entity_meta?.BOSS003;
+  if (luci_meta2?.conditional_buffs) {
+    const dmg_by_elem = {};
+    for (const ev of result.log) {
+      if (!['NORMAL_ATTACK','CHARGE_ATTACK','ABILITY'].includes(ev.type)) continue;
+      if (ev.target_id !== 'BOSS003') continue;
+      const el = ev.element;
+      if (!el) continue;
+      dmg_by_elem[el] = (dmg_by_elem[el] || 0) + (ev.damage || 0);
+    }
+    const did_chain = result.log.some(ev => ev.type === 'CHAIN_BURST' && (ev.chain_count || 0) >= 4 && ev.target_id === 'BOSS003');
+    let changed = false;
+    luci_meta2.conditional_buffs = luci_meta2.conditional_buffs.map(b => {
+      if (!b.active) return b;
+      const cc = b.clear_condition;
+      if (!cc) return b;
+      if (cc.type === 'ELEMENT_DAMAGE_IN_TURN') {
+        if ((dmg_by_elem[cc.element] || 0) >= (cc.threshold || 0)) { changed = true; return { ...b, active: false }; }
+      }
+      if (cc.type === 'CHAIN_BURST') {
+        if (did_chain) { changed = true; return { ...b, active: false }; }
+      }
+      return b;
+    });
+    const non_final_active = luci_meta2.conditional_buffs.filter(b => b.id !== 'LABOR_FINAL' && b.active).length;
+    luci_meta2.conditional_buffs = luci_meta2.conditional_buffs.map(b => {
+      if (!b.active) return b;
+      if (b.clear_condition?.type === 'ALL_OTHER_LABORS_CLEARED' && non_final_active === 0) { changed = true; return { ...b, active: false }; }
+      return b;
+    });
+    if (changed) {
+      if (!player.pending_skill_log) player.pending_skill_log = [];
+      for (const b of luci_meta2.conditional_buffs) {
+        if (!b.active) continue;
+      }
+      player.pending_skill_log.push({ type: 'SYSTEM', msg: 'A Labor condition was met.' });
+    }
+  }
+
+  const meta = room.entity_meta?.BOSS003;
+  if (meta?.damage_cap?.active && target_id === 'BOSS003') {
+    const dealt = result.log.filter(e => ['NORMAL_ATTACK','CHARGE_ATTACK','CHAIN_BURST','ABILITY'].includes(e.type) && e.target_id === 'BOSS003').reduce((s, e) => s + (e.damage || e.cb_bonus || 0), 0);
+    const luci_local = player.local_boss?.BOSS003;
+    if (dealt > 0 && luci_local?.broken_turns > 0) {
+      meta.damage_cap.active = false;
+      if (!player.pending_skill_log) player.pending_skill_log = [];
+      player.pending_skill_log.push({ type: 'SYSTEM', msg: 'Wings of the Word shatters!' });
+    }
+  }
+
+  const target_def = room.entity_defs[target_id];
+  if (target_def?.on_death && room.entities[target_id]?.hp <= 0 && !room.dead_entities[target_id]) {
+    room.dead_entities[target_id] = true;
+    applySubEntityOnDeath(room, target_def, player.pending_skill_log || (player.pending_skill_log = []));
+  }
+
   // Check victory
-  const victory = room.shared_boss_hp <= 0;
+  const victory = room.entities[room.boss_def.id].hp <= 0;
   if (victory) {
     room.status = 'VICTORY';
     buildRewards(room);
@@ -333,17 +440,29 @@ export function playerAttack(room_id, player_id) {
 
   let boss_turn_log = [];
   if (!victory) {
-    // Boss attacks this player locally
-    const boss_result = resolveBossAction({
-      boss_def: room.boss_def,
-      boss_state: boss_ctx,
-      all_player_states: [player],
-    });
-    boss_turn_log = boss_result.log;
-    syncBossContext(room, player, boss_ctx);
+    const entity_ids = Object.keys(room.entities);
+    for (const eid of entity_ids) {
+      if (room.entities[eid].hp <= 0) continue;
+      const edef = room.entity_defs[eid];
+      const ectx = buildBossContext(room, player, eid);
+      const phase_before = ectx.current_phase_idx;
+      const new_phase = checkPhaseTransition(edef, ectx);
+      if (new_phase && ectx.current_phase_idx !== phase_before) {
+        boss_turn_log.push({ type: 'PHASE_CHANGE', source_id: eid, phase: new_phase.phase, description: new_phase.on_enter?.description || `${edef.name} enters Phase ${new_phase.phase}!` });
+        const meta2 = room.entity_meta?.[eid];
+        if (new_phase.on_enter && !meta2?.phase_entered?.[new_phase.phase]) {
+          if (meta2?.phase_entered) meta2.phase_entered[new_phase.phase] = true;
+          const oe = resolveBossOnEnter({ boss_def: edef, boss_state: ectx, on_enter: new_phase.on_enter, all_player_states: [player] });
+          boss_turn_log.push(...oe.log);
+        }
+      }
+      const boss_result = resolveBossAction({ boss_def: edef, boss_state: ectx, all_player_states: [player] });
+      boss_turn_log.push(...boss_result.log);
+      syncBossContext(room, player, ectx);
+    }
 
     // Tick status effects for this player
-    const tick_log = tickAllEffects([player], boss_ctx);
+    const tick_log = tickAllEffects([player], buildBossContext(room, player, room.boss_def.id));
     boss_turn_log.push(...tick_log);
 
     // Decrement ability cooldowns (only on ATTACK turn end, not on skill use)
@@ -355,11 +474,17 @@ export function playerAttack(room_id, player_id) {
       }
     }
 
-    // Check phase transition for this player's local view
-    const new_phase = checkPhaseTransition(room.boss_def, boss_ctx);
-    if (new_phase) {
-      boss_turn_log.push({ type: 'PHASE_CHANGE', phase: new_phase.phase, description: new_phase.on_enter?.description || `Boss enters Phase ${new_phase.phase}!` });
-      player.local_boss.current_phase_idx = boss_ctx.current_phase_idx;
+    const luci_meta = room.entity_meta?.BOSS003;
+    if (luci_meta?.countdown && Array.isArray(boss_turn_log)) {
+      const kos = boss_turn_log.filter(e => e.type === 'ALLY_KO').length;
+      if (kos > 0) {
+        luci_meta.countdown.current = Math.max(0, (luci_meta.countdown.current ?? 0) - kos);
+        boss_turn_log.push({ type: 'COUNTDOWN', name: luci_meta.countdown.name, current: luci_meta.countdown.current });
+        if (luci_meta.countdown.current <= 0) {
+          room.status = 'DEFEAT';
+          for (const p of room.players) for (const c of p.characters) c.hp = 0;
+        }
+      }
     }
   }
 
@@ -377,8 +502,10 @@ export function playerAttack(room_id, player_id) {
     turn_number: player.turn_number,
     attack_log: result.log,
     boss_log: boss_turn_log,
-    shared_boss_hp: room.shared_boss_hp,
-    victory,
+    shared_boss_hp: room.entities[room.boss_def.id].hp,
+    entity_hp: Object.fromEntries(Object.entries(room.entities).map(([id, e]) => [id, e.hp])),
+    victory: room.status === 'VICTORY',
+    defeat: room.status === 'DEFEAT',
     player_defeated,
     rewards: room.rewards || null,
   };
@@ -387,30 +514,49 @@ export function playerAttack(room_id, player_id) {
 // ── BOSS CONTEXT HELPERS ──────────────────────────────────────────────────────
 // Combines shared HP with player's local boss state for the combat engine
 function buildBossContext(room, player) {
+  const entity_id = arguments[2] || room.boss_def.id;
+  const ent = room.entities[entity_id];
+  const def = room.entity_defs[entity_id] || room.boss_def;
+  const local = player.local_boss?.[entity_id] || buildBossLocalState(def);
+  const meta = room.entity_meta?.[entity_id] || {};
+  const damage_cap_active = isLuciliusMain(def) ? !!meta.damage_cap?.active : false;
+
   return {
-    id: room.boss_def.id,
-    name: room.boss_def.name,
-    element: room.boss_def.element,
-    hp: room.shared_boss_hp,
-    hp_max: room.shared_boss_hp_max,
-    def: room.boss_def.def,
-    charge_bar: player.local_boss.charge_bar,
-    current_phase_idx: player.local_boss.current_phase_idx,
-    status_effects: player.local_boss.status_effects,
-    atk_up_mod: player.local_boss.atk_up_mod,
-    triggers: player.local_boss.triggers,
+    id: def.id,
+    name: def.name,
+    element: def.element,
+    hp: ent?.hp ?? def.hp_max,
+    hp_max: ent?.hp_max ?? def.hp_max,
+    def: def.def,
+    charge_bar: local.charge_bar,
+    current_phase_idx: local.current_phase_idx,
+    status_effects: local.status_effects,
+    atk_up_mod: local.atk_up_mod,
+    broken_turns: local.broken_turns || 0,
+    triggers: room.entity_triggers?.[entity_id] || [],
+    conditional_buffs: meta.conditional_buffs || null,
+    passive_stacks: meta.passive_stacks || null,
+    countdown: meta.countdown || null,
+    damage_cap: damage_cap_active ? { active: true, per_turn_cap: meta.damage_cap?.per_turn_cap } : { active: false, per_turn_cap: null },
   };
 }
 
 function syncBossContext(room, player, boss_ctx) {
-  // Shared: only HP
-  room.shared_boss_hp = boss_ctx.hp;
-  // Local: everything else
-  player.local_boss.charge_bar = boss_ctx.charge_bar;
-  player.local_boss.current_phase_idx = boss_ctx.current_phase_idx;
-  player.local_boss.status_effects = boss_ctx.status_effects;
-  player.local_boss.atk_up_mod = boss_ctx.atk_up_mod;
-  player.local_boss.triggers = boss_ctx.triggers;
+  if (!room.entities[boss_ctx.id]) return;
+  room.entities[boss_ctx.id].hp = boss_ctx.hp;
+  if (room.entity_triggers?.[boss_ctx.id]) room.entity_triggers[boss_ctx.id] = boss_ctx.triggers || room.entity_triggers[boss_ctx.id];
+  if (boss_ctx.conditional_buffs && room.entity_meta?.[boss_ctx.id]) room.entity_meta[boss_ctx.id].conditional_buffs = boss_ctx.conditional_buffs;
+  if (boss_ctx.passive_stacks && room.entity_meta?.[boss_ctx.id]) room.entity_meta[boss_ctx.id].passive_stacks = boss_ctx.passive_stacks;
+  if (boss_ctx.countdown && room.entity_meta?.[boss_ctx.id]) room.entity_meta[boss_ctx.id].countdown = boss_ctx.countdown;
+  if (boss_ctx.damage_cap && room.entity_meta?.[boss_ctx.id]?.damage_cap) room.entity_meta[boss_ctx.id].damage_cap.active = boss_ctx.damage_cap.active;
+
+  if (!player.local_boss) player.local_boss = {};
+  if (!player.local_boss[boss_ctx.id]) player.local_boss[boss_ctx.id] = buildBossLocalState(room.entity_defs[boss_ctx.id]);
+  player.local_boss[boss_ctx.id].charge_bar = boss_ctx.charge_bar;
+  player.local_boss[boss_ctx.id].current_phase_idx = boss_ctx.current_phase_idx;
+  player.local_boss[boss_ctx.id].status_effects = boss_ctx.status_effects;
+  player.local_boss[boss_ctx.id].atk_up_mod = boss_ctx.atk_up_mod;
+  player.local_boss[boss_ctx.id].broken_turns = boss_ctx.broken_turns || 0;
 }
 
 // ── REWARDS ───────────────────────────────────────────────────────────────────
@@ -446,15 +592,19 @@ export function getRoomSnapshot(room_id) {
       id: room.boss_def.id,
       name: room.boss_def.name,
       element: room.boss_def.element,
-      hp: room.shared_boss_hp,
-      hp_max: room.shared_boss_hp_max,
+      hp: room.entities[room.boss_def.id].hp,
+      hp_max: room.entities[room.boss_def.id].hp_max,
     },
+    sub_entities: Object.values(room.entities)
+      .filter(e => e.id !== room.boss_def.id)
+      .map(e => ({ id: e.id, name: e.name, element: e.element, hp: e.hp, hp_max: e.hp_max })),
     players: room.players.map(p => getPlayerSnapshot(p)),
     rewards: room.rewards || null,
   };
 }
 
 export function getPlayerSnapshot(player) {
+  const main_id = player.main_boss_id || 'BOSS001';
   return {
     player_id: player.player_id,
     name: player.name,
@@ -462,11 +612,20 @@ export function getPlayerSnapshot(player) {
     disconnected: player.disconnected,
     honors: player.honors,
     turn_number: player.turn_number,
+    target_id: player.target_id || main_id,
     local_boss: {
-      charge_bar: player.local_boss.charge_bar,
-      current_phase: player.local_boss.current_phase_idx + 1,
-      status_effects: player.local_boss.status_effects,
+      charge_bar: player.local_boss?.[main_id]?.charge_bar ?? 0,
+      current_phase: (player.local_boss?.[main_id]?.current_phase_idx ?? 0) + 1,
+      status_effects: player.local_boss?.[main_id]?.status_effects ?? [],
     },
+    local_sub_entities: Object.entries(player.local_boss || {})
+      .filter(([id]) => id !== main_id)
+      .map(([id, s]) => ({
+        id,
+        charge_bar: s.charge_bar ?? 0,
+        current_phase: (s.current_phase_idx ?? 0) + 1,
+        status_effects: s.status_effects ?? [],
+      })),
     characters: player.characters.map(c => ({
       id: c.id,
       name: c.name,

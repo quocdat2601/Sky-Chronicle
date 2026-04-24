@@ -64,8 +64,8 @@ io.on('connection', (socket) => {
   console.log(`[WS] Connected: ${socket.id}`);
 
   // ── join_room ──
-  socket.on('join_room', ({ room_id, player_id, player_name, party_config, grid_config }) => {
-    const result = joinRoom({ room_id, player_id, player_name, party_config, grid_config });
+  socket.on('join_room', ({ room_id, player_id, player_name, party_config, grid_config, mc_config }) => {
+    const result = joinRoom({ room_id, player_id, player_name, party_config, grid_config, mc_config });
     if (result.error) { socket.emit('error', result); return; }
 
     socket.join(room_id);
@@ -78,18 +78,20 @@ io.on('connection', (socket) => {
 
   // ── player_ready ──
   socket.on('player_ready', ({ room_id, player_id }) => {
-    const room = setPlayerReady(room_id, player_id);
-    if (!room) return;
+    const r = setPlayerReady(room_id, player_id);
+    if (!r?.room) return;
+    const { room, opening_log } = r;
     const snap = getRoomSnapshot(room_id);
     io.to(room_id).emit('room_state', snap);
     if (room.status === 'IN_PROGRESS') {
       io.to(room_id).emit('raid_started', { message: 'All players ready — RAID BEGINS!', boss: snap.boss });
+      if (opening_log?.length) io.to(room_id).emit('opening_log', { log: opening_log });
     }
   });
 
   // ── use_skill (instant, pre-attack, doesn't end turn) ──
-  socket.on('use_skill', ({ room_id, player_id, char_id, ability_id }) => {
-    const result = useSkill(room_id, player_id, char_id, ability_id);
+  socket.on('use_skill', ({ room_id, player_id, char_id, ability_id, target_id }) => {
+    const result = useSkill(room_id, player_id, char_id, ability_id, target_id);
     if (result.error) { socket.emit('skill_error', result); return; }
 
     // Confirm to the casting player with full updated state
@@ -99,6 +101,7 @@ io.on('connection', (socket) => {
     socket.emit('skill_result', {
       log: result.log,
       shared_boss_hp: result.shared_boss_hp,
+      entity_hp: result.entity_hp || null,
       my_state: player ? getPlayerSnapshot(player) : null,
     });
 
@@ -108,6 +111,7 @@ io.on('connection', (socket) => {
       player_name: player?.name,
       log: result.log,
       shared_boss_hp: result.shared_boss_hp,
+      entity_hp: result.entity_hp || null,
     });
 
     if (result.victory) {
@@ -116,8 +120,8 @@ io.on('connection', (socket) => {
   });
 
   // ── player_attack (ends this player's turn) ──
-  socket.on('player_attack', ({ room_id, player_id }) => {
-    const result = playerAttack(room_id, player_id);
+  socket.on('player_attack', ({ room_id, player_id, target_id }) => {
+    const result = playerAttack(room_id, player_id, target_id);
     if (result.error) { socket.emit('action_error', result); return; }
 
     const room = getRoom(room_id);
@@ -129,6 +133,7 @@ io.on('connection', (socket) => {
       attack_log: result.attack_log,
       boss_log: result.boss_log,
       shared_boss_hp: result.shared_boss_hp,
+      entity_hp: result.entity_hp || null,
       my_state: player ? getPlayerSnapshot(player) : null,
       player_defeated: result.player_defeated,
     });
@@ -139,10 +144,14 @@ io.on('connection', (socket) => {
       player_name: player?.name,
       attack_log: result.attack_log,
       shared_boss_hp: result.shared_boss_hp,
+      entity_hp: result.entity_hp || null,
     });
 
     if (result.victory) {
       io.to(room_id).emit('raid_end', { result: 'VICTORY', rewards: result.rewards });
+    }
+    if (result.defeat) {
+      io.to(room_id).emit('raid_end', { result: 'DEFEAT', rewards: null });
     }
   });
 
@@ -153,14 +162,14 @@ io.on('connection', (socket) => {
   });
 
   // ── disconnect ──
-  socket.on('disconnect', () => {
+  socket.on('disconnect', (reason) => {
     const info = socket_map.get(socket.id);
     if (info) {
       disconnectPlayer(info.room_id, info.player_id);
       io.to(info.room_id).emit('player_disconnected', { player_id: info.player_id });
       socket_map.delete(socket.id);
     }
-    console.log(`[WS] Disconnected: ${socket.id}`);
+    console.log(`[WS] Disconnected: ${socket.id} (${reason || 'unknown'})`);
   });
 });
 
