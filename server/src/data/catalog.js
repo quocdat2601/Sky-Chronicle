@@ -25,6 +25,7 @@ export {
   getSkillName,
 } from './constants.js';
 
+export { SUMMONS }    from './summons.js';
 export { WEAPONS }    from './weapons.js';
 export { CHARACTERS } from './characters.js';
 export { BOSSES }     from './bosses.js';

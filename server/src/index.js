@@ -3,11 +3,11 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 
-import { CHARACTERS, WEAPONS, BOSSES, MC_CLASSES } from './data/catalog.js';
+import { CHARACTERS, WEAPONS, BOSSES, MC_CLASSES, SUMMONS } from './data/catalog.js';
 import { calcGridStats } from './engine/combat.js';
 import {
   createRoom, joinRoom, setPlayerReady,
-  useSkill, playerAttack,
+  useSkill, playerAttack, useSummon,
   disconnectPlayer, getRoomSnapshot, getPlayerSnapshot, getAllRooms, getRoom,
 } from './raid/raidManager.js';
 
@@ -26,6 +26,7 @@ const io = new Server(httpServer, {
 app.get('/api/catalog/characters', (_, res) => res.json(CHARACTERS));
 app.get('/api/catalog/weapons',    (_, res) => res.json(WEAPONS));
 app.get('/api/catalog/mc-classes', (_, res) => res.json(MC_CLASSES));
+app.get('/api/catalog/summons',    (_, res) => res.json(SUMMONS));
 app.get('/api/catalog/bosses',     (_, res) => res.json(BOSSES.map(b => ({
   id: b.id, name: b.name, element: b.element, hp_max: b.hp_max,
 }))));
@@ -64,8 +65,8 @@ io.on('connection', (socket) => {
   console.log(`[WS] Connected: ${socket.id}`);
 
   // ── join_room ──
-  socket.on('join_room', ({ room_id, player_id, player_name, party_config, grid_config, mc_config }) => {
-    const result = joinRoom({ room_id, player_id, player_name, party_config, grid_config, mc_config });
+  socket.on('join_room', ({ room_id, player_id, player_name, party_config, grid_config, mc_config, summon_config }) => {
+    const result = joinRoom({ room_id, player_id, player_name, party_config, grid_config, mc_config, summon_config });
     if (result.error) { socket.emit('error', result); return; }
 
     socket.join(room_id);
@@ -74,6 +75,32 @@ io.on('connection', (socket) => {
     socket.emit('room_state', getRoomSnapshot(room_id));
     socket.to(room_id).emit('player_joined', { player_id, name: player_name });
     console.log(`[WS] ${player_name} joined ${room_id}`);
+  });
+
+  // ── use_summon (active call, once per battle) ──
+  socket.on('use_summon', ({ room_id, player_id }) => {
+    const result = useSummon(room_id, player_id);
+    if (result.error) { socket.emit('summon_error', result); return; }
+
+    const room = getRoom(room_id);
+    const player = room?.players.find(p => p.player_id === player_id);
+
+    socket.emit('summon_result', {
+      log: result.log,
+      shared_boss_hp: result.shared_boss_hp,
+      my_state: player ? getPlayerSnapshot(player) : null,
+    });
+
+    socket.to(room_id).emit('player_used_summon', {
+      player_id,
+      player_name: player?.name,
+      log: result.log,
+      shared_boss_hp: result.shared_boss_hp,
+    });
+
+    if (result.victory) {
+      io.to(room_id).emit('raid_end', { result: 'VICTORY', rewards: result.rewards });
+    }
   });
 
   // ── player_ready ──

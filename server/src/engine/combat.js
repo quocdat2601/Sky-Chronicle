@@ -4,28 +4,57 @@
 import { ELEMENT_ADVANTAGE } from '../data/constants.js';
 
 // ── DAMAGE CAPS ───────────────────────────────────────────────────────────────
-// Source: GBF_Weapon_Skills_Research.xlsx "Damage Caps" tab
-// NA soft cap ~440k, CA soft cap ~1.16M (xlsx values used as primary source)
-const NA_CAP_BASE        = 440_000;
-const CA_CAP_BASE        = 1_160_000;
-const CB_CAP_BASE        = 2_000_000;  // Chain Burst soft cap
-const SKILL_CAP_BASE     = 490_000;    // Skill damage baseline (varies per skill)
+// Source: gbf.wiki/Damage_Cap (confirmed February 2026)
+// NA: 4-tier reduction system with soft cap ~445k at 600k raw
+// CA/CB: soft cap 1,685,000 (wiki: "1.685 million")
+const NA_CAP_TIER1_RAW   = 300_000;   // 100% passes through below this
+const NA_CAP_TIER2_RAW   = 400_000;   // 80% of overage past tier1
+const NA_CAP_TIER3_RAW   = 500_000;   // 60% of overage past tier2
+const NA_CAP_TIER4_RAW   = 600_000;   // 5% of overage past tier3 — effectively the soft cap
+const CA_CAP_BASE        = 1_685_000; // wiki: CA and CB share this soft cap
+const CB_CAP_BASE        = 1_685_000; // wiki: "Chain bursts have a soft damage cap of 1.685 million"
+const SKILL_CAP_BASE     = 490_000;   // Skill damage baseline (T1 threshold)
 const NA_CAP_HARD        = 2_000_000;
 const CA_CAP_HARD        = 6_000_000;
 const CB_CAP_HARD        = 20_000_000;
-const NA_CAP_WEAPON_MAX  = 0.20;       // weapon pool: max +20% on NA cap
-const CA_CAP_WEAPON_MAX  = 1.00;       // weapon pool: max +100% on CA cap
+const NA_CAP_WEAPON_MAX  = 0.20;      // weapon pool: max +20% on NA cap (wiki confirmed)
+const CA_CAP_WEAPON_MAX  = 1.00;      // weapon pool: max +100% on CA cap
 const CB_CAP_WEAPON_MAX  = 1.00;
 const SKILL_CAP_WEAPON_MAX = 1.00;
 const SERAPHIC_CAP       = 0.20;
 const DA_RATE_CAP        = 1.00;
 const TA_RATE_CAP        = 0.50;
 const CRIT_RATE_CAP      = 1.00;
-const DEF_FLOOR_RATIO    = 0.50;       // DEF can't drop below 50% of base (wiki)
-const SUPP_CAP           = 100_000;    // supplemental flat cap
-const CHARGE_SPEED_CAP   = 0.75;       // Progression 75% total cap
+const DEF_FLOOR_RATIO    = 0.50;      // DEF can't drop below 50% of base (wiki)
+const DEF_DOWN_CAP       = 4.00;      // DEF debuffs cap at 400% reduction (wiki)
+const SUPP_CAP           = 100_000;   // supplemental flat cap
+const CHARGE_SPEED_CAP   = 0.75;      // Progression 75% total cap
 
-// ── SOFT CAP WITH DIMINISHING RETURNS ─────────────────────────────────────────
+// ── NA SOFT CAP — 4-tier reduction system (wiki confirmed) ────────────────────
+// Tier1: 0–300k  → 100% passes through
+// Tier2: 300–400k → 80% of overage passes through
+// Tier3: 400–500k → 60% of overage passes through
+// Tier4: 500–600k → 5% of overage passes through
+// Past 600k (hard diminishing): ~0.1% passes through toward hard cap
+// Weapon DMG Cap Up scales all four thresholds proportionally.
+function applyNACap(raw, cap_mult, hard) {
+  const t1 = NA_CAP_TIER1_RAW * cap_mult;
+  const t2 = NA_CAP_TIER2_RAW * cap_mult;
+  const t3 = NA_CAP_TIER3_RAW * cap_mult;
+  const t4 = NA_CAP_TIER4_RAW * cap_mult;
+
+  let dmg = 0;
+  if (raw <= t1) { dmg = raw; }
+  else if (raw <= t2) { dmg = t1 + (raw - t1) * 0.80; }
+  else if (raw <= t3) { dmg = t1 + (t2 - t1) * 0.80 + (raw - t2) * 0.60; }
+  else if (raw <= t4) { dmg = t1 + (t2 - t1) * 0.80 + (t3 - t2) * 0.60 + (raw - t3) * 0.05; }
+  else {
+    dmg = t1 + (t2 - t1) * 0.80 + (t3 - t2) * 0.60 + (t4 - t3) * 0.05 + (raw - t4) * 0.001;
+  }
+  return Math.round(Math.min(dmg, hard));
+}
+
+// ── GENERIC SOFT CAP — used for CA and CB (simple 2-stage per wiki) ────────────
 // Between soft and hard: 30% of overage passes through.
 // Past hard: 0.1% passes through.
 function applySoftCap(raw, soft, hard) {
@@ -101,9 +130,19 @@ export function calcGridStats(weapons /* Weapon[] */) {
   let supp_flat = 0;  // flat damage per hit — NOT a percentage
   // ── Totals ────────────────────────────────────────────────────────────────
   let grid_atk = 0, grid_hp = 0;
-  // hp_skill_sum: sum of all HP-boosting skill magnitudes (Aegis + Majesty)
-  // Applied as: char.hp_max = base_hp × (1 + hp_skill_sum) per GBF wiki
-  let hp_skill_sum = 0;
+  // hp_aegis_sum: HP_BOOST* skills — no bracket, no summon aura
+  // normal_hp_sum / omega_hp_sum / ex_hp_sum: Majesty HP component per bracket
+  //   → multiplied by (1 + optimus/omega_aura) exactly like the ATK component
+  // TYRANNY: negative HP contribution in Normal bracket
+  // Final char HP boost = hp_aegis_sum
+  //                     + normal_hp_sum × (1 + optimus_aura)
+  //                     + omega_hp_sum  × (1 + omega_aura)
+  //                     + ex_hp_sum
+  let hp_skill_sum = 0;   // kept for backward compat — legacy total (no aura)
+  let hp_aegis_sum  = 0;  // HP_BOOST* only — not in any ATK bracket
+  let normal_hp_sum = 0;  // MAJESTY_NORMAL HP component
+  let omega_hp_sum  = 0;  // MAJESTY_OMEGA  HP component
+  let ex_hp_sum     = 0;  // MAJESTY_EX     HP component
 
   for (const w of weapons) {
     if (!w) continue;
@@ -132,17 +171,17 @@ export function calcGridStats(weapons /* Weapon[] */) {
         // Legacy key
         case 'ENMITY':         normal_enm  += mag; break;
 
-        // ── Majesty (ATK + HP) ────────────────────────────────────────────────
-        // ATK component goes to its bracket; HP component adds mag to hp_skill_sum
-        // (HP skill % applies to each char's base_hp, per GBF wiki)
-        case 'MAJESTY_NORMAL': normal_sum += mag; hp_skill_sum += mag; break;
-        case 'MAJESTY_OMEGA':  omega_sum  += mag; hp_skill_sum += mag; break;
-        case 'MAJESTY_EX':     ex_sum     += mag; hp_skill_sum += mag; break;
+        // ── Majesty (ATK + HP, same bracket) ─────────────────────────────────
+        // ATK goes into its bracket sum; HP goes into the matching bracket HP sum.
+        // Both are multiplied by the same summon aura at display/combat time.
+        case 'MAJESTY_NORMAL': normal_sum += mag; normal_hp_sum += mag; hp_skill_sum += mag; break;
+        case 'MAJESTY_OMEGA':  omega_sum  += mag; omega_hp_sum  += mag; hp_skill_sum += mag; break;
+        case 'MAJESTY_EX':     ex_sum     += mag; ex_hp_sum     += mag; hp_skill_sum += mag; break;
 
-        // ── HP skill (Aegis) — boosts each char's HP by mag% of their own base_hp ──
+        // ── HP Boost (Aegis) — not in any ATK bracket, no summon aura ────────
         case 'HP_BOOST':
         case 'HP_BOOST_OMEGA':
-        case 'HP_BOOST_EX':    hp_skill_sum += mag; break;
+        case 'HP_BOOST_EX':    hp_aegis_sum += mag; hp_skill_sum += mag; break;
 
         // ── Utility ───────────────────────────────────────────────────────────
         case 'CRITICAL_RATE':  crit_sum        += mag; break;
@@ -154,8 +193,8 @@ export function calcGridStats(weapons /* Weapon[] */) {
         case 'RESTRAINT':      da_rate_sum     += mag; crit_sum    += mag; break;
         // CELERE = ATK + Crit (ATK goes into normal bracket)
         case 'CELERE':         normal_sum      += mag; crit_sum    += mag; break;
-        // TYRANNY = big ATK (normal bracket) but reduces each char's HP by mag%
-        case 'TYRANNY':        normal_sum += mag; hp_skill_sum -= mag; break;
+        // TYRANNY = big ATK (normal bracket) but reduces each char's HP by mag% (also Normal bracket)
+        case 'TYRANNY':        normal_sum += mag; normal_hp_sum -= mag; hp_skill_sum -= mag; break;
         // Progression — accumulates each turn; stored for charge bar calc
         case 'CHARGE_SPEED':
         case 'PROG_NORMAL':
@@ -178,7 +217,11 @@ export function calcGridStats(weapons /* Weapon[] */) {
   return {
     grid_atk,
     grid_hp,      // sum of weapon base HP values — displayed as grid total stat
-    hp_skill_sum, // sum of HP skill magnitudes (Aegis + Majesty) — applied as % of char base_hp
+    hp_skill_sum, // legacy total (no aura) — kept for raidManager backward compat
+    hp_aegis_sum, // HP_BOOST* skills only (Aegis) — not bracket-amplified
+    normal_hp_sum,// MAJESTY_NORMAL HP — amplified by (1 + optimus_aura)
+    omega_hp_sum, // MAJESTY_OMEGA  HP — amplified by (1 + omega_aura)
+    ex_hp_sum,    // MAJESTY_EX     HP — no aura
 
     // Raw bracket sums — summon aura applied in calcDamage at hit time
     normal_sum,   omega_sum,   ex_sum,
@@ -251,9 +294,10 @@ export function calcDamage({
   is_ca = false,
   is_skill = false,
   skill_multiplier_for_cap = null,  // pass the raw multiplier value for T1/T2 exempt check
-  // Summon auras — pass from raid state if available; default to no aura
-  optimus_aura = 0,  // addend: 0.5 = ×1.5 on Normal bracket skills
-  omega_aura   = 0,  // addend: 0.5 = ×1.5 on Omega bracket skills
+  // Summon auras — read from gridStats if not explicitly passed.
+  // grid_stats.optimus_aura / omega_aura are stored at joinRoom time from summon_config.
+  optimus_aura = 0,
+  omega_aura   = 0,
   // In-battle buffs
   unique_mult  = 1.0,  // char unique / crew / assassin composite
   // Progression Ele.ATK (grows per turn, passed from battle state)
@@ -266,9 +310,13 @@ export function calcDamage({
     na_cap_bonus, ca_cap_bonus, skill_cap_bonus,
   } = gridStats;
 
+  // ── Summon aura fallback — read from gridStats when stored at joinRoom ────
+  const eff_optimus_aura = optimus_aura || gridStats.optimus_aura || 0;
+  const eff_omega_aura   = omega_aura   || gridStats.omega_aura   || 0;
+
   // ── Summon aura multipliers ────────────────────────────────────────────────
-  const norm_aura  = 1 + optimus_aura;   // e.g. 1.5 for Optimus at base
-  const omega_aura_m = 1 + omega_aura;   // e.g. 1.5 for Omega summon at base
+  const norm_aura    = 1 + eff_optimus_aura;
+  const omega_aura_m = 1 + eff_omega_aura;
 
   // ── HP ratio for stamina/enmity curves ────────────────────────────────────
   const hp_ratio = attacker.hp_max > 0
@@ -302,13 +350,17 @@ export function calcDamage({
     * (1 + se.stam_ex)
     * (1 + se.enm_ex);
 
-  // ── DEF (floored at 50% of base per wiki) ─────────────────────────────────
+  // ── DEF (floored at 50% of base; debuff reduction capped at 400% per wiki) ──
   const base_def   = defender.def || 10;
   const def_floor  = base_def * DEF_FLOOR_RATIO;
-  const eff_def    = Math.max(def_floor, base_def * (1 + (defender.def_down || 0)));
+  const def_down   = Math.min(defender.def_down || 0, DEF_DOWN_CAP); // clamp at 400%
+  const eff_def    = Math.max(def_floor, base_def * (1 + def_down));
 
   // ── Base ATK ───────────────────────────────────────────────────────────────
   const base_atk = (attacker.base_atk + gridStats.grid_atk) * atk_buff_mult;
+
+  // ── RNG variance ±5% per hit (wiki: "Random Modifier 0.95–1.05") ──────────
+  const rng = 0.95 + Math.random() * 0.10;
 
   // ── Main formula ───────────────────────────────────────────────────────────
   const raw = base_atk
@@ -318,39 +370,44 @@ export function calcDamage({
     * ex_boost
     * unique_mult
     * dmg_multiplier
+    * rng
     / Math.max(1, eff_def);
 
-  // ── Seraphic (BEFORE cap, only when hitting weak element) ─────────────────
-  const is_on_element = elem_adv > 0;
-  const after_seraphic = (is_on_element && seraphic_bonus > 0)
-    ? raw * (1 + seraphic_bonus)
-    : raw;
+  // ── Crit roll — only triggers vs weak element or Null (wiki confirmed) ─────
+  const is_weak_target = elem_adv > 0 || defender.element === 'NULL';
+  const is_crit  = is_weak_target && Math.random() < crit_rate;
+  const crit_mod = is_crit ? 1.5 : 1.0;
 
-  // ── Crit roll ─────────────────────────────────────────────────────────────
-  const is_crit   = Math.random() < crit_rate;
-  const crit_mod  = is_crit ? 1.5 : 1.0;
-  const after_crit = after_seraphic * crit_mod;
+  // ── Seraphic modifier — position differs per attack type ───────────────────
+  // NA:    cap → ×Seraphic → +Supplemental  (Seraphic AFTER cap)
+  // CA:    ×Seraphic → cap → +Supplemental  (Seraphic BEFORE cap)
+  // Skill: ×Seraphic → cap → +Supplemental  (Seraphic BEFORE cap)
+  // Seraphic also extends the cap itself by (1 + seraphic_bonus)
+  const is_on_element  = elem_adv > 0;
+  const seraphic_mult  = (is_on_element && seraphic_bonus > 0) ? (1 + seraphic_bonus) : 1.0;
+  const pre_cap_value  = is_ca || is_skill ? raw * crit_mod * seraphic_mult : raw * crit_mod;
 
-  // ── Damage cap by attack type ─────────────────────────────────────────────
+  // ── Damage cap by attack type (Seraphic extends cap for CA/Skill) ──────────
   let capped;
   if (is_ca) {
-    capped = applySoftCap(
-      after_crit,
-      CA_CAP_BASE * (1 + ca_cap_bonus),
-      CA_CAP_HARD,
-    );
+    const eff_ca_cap = CA_CAP_BASE * (1 + ca_cap_bonus) * seraphic_mult;
+    capped = applySoftCap(pre_cap_value, eff_ca_cap, CA_CAP_HARD);
   } else if (is_skill) {
-    capped = applySkillCap(after_crit, skill_cap_bonus, skill_multiplier_for_cap ?? dmg_multiplier);
+    // Seraphic extends skill cap too
+    const eff_skill_bonus = skill_cap_bonus + (seraphic_mult - 1);
+    capped = applySkillCap(pre_cap_value, eff_skill_bonus, skill_multiplier_for_cap ?? dmg_multiplier);
   } else {
-    capped = applySoftCap(
-      after_crit,
-      NA_CAP_BASE * (1 + na_cap_bonus),
-      NA_CAP_HARD,
-    );
+    // NA: cap first, then apply Seraphic after
+    const cap_mult = 1 + na_cap_bonus;
+    const pre_seraphic_capped = applyNACap(pre_cap_value, cap_mult, NA_CAP_HARD);
+    capped = Math.min(Math.round(pre_seraphic_capped * seraphic_mult), NA_CAP_HARD);
   }
 
   // ── Supplemental (flat, AFTER cap, immune to DEF/ATK) ─────────────────────
-  const supp_damage = Math.floor(supp_flat);
+  // NA: supplemental NOT boosted by Seraphic (wiki confirmed)
+  // CA/Skill: supplemental IS boosted by Seraphic
+  const supp_seraphic = (is_ca || is_skill) ? seraphic_mult : 1.0;
+  const supp_damage   = Math.floor(supp_flat * supp_seraphic);
   const total = Math.max(0, capped) + supp_damage;
 
   return {
@@ -534,12 +591,17 @@ export function resolvePlayerAction({ action, player_state, boss_state, grid_sta
     }
 
     // ── Chain Burst ───────────────────────────────────────────────────────────
+    // CB damage = sum of contributing CA damages × bonus_pct, then soft-capped
+    // CB ignores DEF (wiki: "Chain burst damage ignores DEF")
+    // CB soft cap = 1,685,000 (same as CA), hard cap = 20,000,000
     if (ca_triggered.length >= 2) {
       const chain_count = Math.min(ca_triggered.length, 4);
       const bonuses    = { 2: 0.25, 3: 0.50, 4: 1.00 };
       const bonus_pct  = bonuses[chain_count] || 0;
-      const cb_bonus   = Math.floor(ca_damages.reduce((s, c) => s + c.damage, 0) * bonus_pct);
-      const dealt = applyBossDamage(boss_state, cb_bonus);
+      const raw_cb      = ca_damages.reduce((s, c) => s + c.damage, 0) * bonus_pct;
+      const cb_cap_mult = 1 + (grid_stats?.cb_cap_bonus || 0);
+      const cb_bonus    = applySoftCap(raw_cb, CB_CAP_BASE * cb_cap_mult, CB_CAP_HARD);
+      const dealt       = applyBossDamage(boss_state, cb_bonus);
       log.push({ type: 'CHAIN_BURST', target_id, chain_count, bonus_pct, cb_bonus: dealt, participants: ca_triggered.map(c => c.name) });
     }
   }

@@ -37,15 +37,40 @@ export const useGameStore = create((set, get) => ({
   setMcClass: (id) => set({ mc_class_id: id, mc_selected_skills: [] }),
   mc_selected_skills: [], // up to 3 subskill names selected from current class
   setMcSelectedSkills: (skills) => set({ mc_selected_skills: skills }),
+  catalog_summons: [],
   loadCatalog: async () => {
-    const [chars, weaps, bosses, mc_classes] = await Promise.all([
-      fetch(`${API}/catalog/characters`).then(r => r.json()),
-      fetch(`${API}/catalog/weapons`).then(r => r.json()),
-      fetch(`${API}/catalog/bosses`).then(r => r.json()),
-      fetch(`${API}/catalog/mc-classes`).then(r => r.json()),
-    ]);
-    set({ catalog_characters: chars, catalog_weapons: weaps, catalog_bosses: bosses, catalog_mc_classes: mc_classes });
+    try {
+      const fetchJson = async (path) => {
+        const r = await fetch(`${API}${path}`);
+        if (!r.ok) throw new Error(`${path} failed: ${r.status}`);
+        return await r.json();
+      };
+      const [chars, weaps, bosses, mc_classes, summons] = await Promise.all([
+        fetchJson('/catalog/characters'),
+        fetchJson('/catalog/weapons'),
+        fetchJson('/catalog/bosses'),
+        fetchJson('/catalog/mc-classes'),
+        fetchJson('/catalog/summons'),
+      ]);
+      set({
+        catalog_characters: chars,
+        catalog_weapons: weaps,
+        catalog_bosses: bosses,
+        catalog_mc_classes: mc_classes,
+        catalog_summons: summons,
+      });
+    } catch (e) {
+      console.error('[Catalog]', e);
+    }
   },
+
+  // ── Summon selection ──────────────────────────────────────────────────────────
+  main_summon_id:    null,   // S001–S012
+  main_summon_stars: 3,
+  sub_summon_id:     null,
+  sub_summon_stars:  3,
+  setMainSummon: (id, stars = 3) => set({ main_summon_id: id, main_summon_stars: stars }),
+  setSubSummon:  (id, stars = 3) => set({ sub_summon_id: id,  sub_summon_stars:  stars }),
 
   // ── Party / Grid ─────────────────────────────────────────────────────────────
   party_character_ids: ['C001', 'C002', 'C003'],
@@ -68,27 +93,84 @@ export const useGameStore = create((set, get) => ({
       headers: { 'Content-Type': 'application/json' },
     }).then(r => r.json());
 
-    // hp_skill_sum comes directly from server calcGridStats — no client recomputation needed
-    // Enrich server stats with pre-computed display fields used by UI panels
+    // ── Summon auras ────────────────────────────────────────────────────────
+    // Compute omega_aura and optimus_aura from currently selected summons.
+    // Formula (wiki): omega_boost  = 1 + omega_sum  × (1 + omega_aura)
+    //                 normal_boost = 1 + normal_sum × (1 + optimus_aura)
+    const { catalog_summons,
+            main_summon_id, main_summon_stars,
+            sub_summon_id,  sub_summon_stars } = get();
+
+    const getSummon = id => catalog_summons?.find(s => s.id === id);
+    const getAuraVal = (id, stars, use_sub) => {
+      const s = getSummon(id);
+      if (!s) return 0;
+      const idx = Math.max(0, Math.min(5, stars ?? s.uncap_stars ?? 3));
+      return use_sub ? (s.sub_aura_value?.[idx] || 0) : (s.aura_value?.[idx] || 0);
+    };
+
+    const main_def = getSummon(main_summon_id);
+    const sub_def  = getSummon(sub_summon_id);
+
+    let omega_aura   = 0;
+    let optimus_aura = 0;
+    if (main_def?.aura_type === 'omega')   omega_aura   += getAuraVal(main_summon_id, main_summon_stars, false);
+    if (main_def?.aura_type === 'optimus') optimus_aura += getAuraVal(main_summon_id, main_summon_stars, false);
+    if (sub_def?.aura_type  === 'omega')   omega_aura   += getAuraVal(sub_summon_id,  sub_summon_stars,  true);
+    if (sub_def?.aura_type  === 'optimus') optimus_aura += getAuraVal(sub_summon_id,  sub_summon_stars,  true);
+
+    // ── Aura-boosted bracket multipliers ────────────────────────────────────
+    // Wiki formula: Omega boost  = 1 + omega_sum  × (1 + omega_aura)
+    //               Normal boost = 1 + normal_sum × (1 + optimus_aura)
+    //               EX boost     = 1 + ex_sum   (no summon aura on EX)
+    // Display: show (multiplier - 1) × 100 as boost % (e.g. 1.77 → 77%)
+    // The summon aura addend (e.g. 1.50 for double Colossus 3★) is stored separately
+    const normal_boost = 1 + (stats.normal_sum || 0) * (1 + optimus_aura);
+    const omega_boost  = 1 + (stats.omega_sum  || 0) * (1 + omega_aura);
+    const ex_boost     = 1 + (stats.ex_sum     || 0); // EX has no summon aura
+
     const enriched_stats = {
       ...stats,
-      // hp_skill_pct: HP skill boost % per character (Aegis + Majesty, additive per GBF wiki)
-      hp_skill_pct:       (stats.hp_skill_sum || 0) * 100,
+      // ── Summon aura addends ───────────────────────────────────────────────
+      optimus_aura,          // raw addend, e.g. 1.20 for Agni 3★
+      omega_aura,            // raw addend, e.g. 1.00 for Colossus 3★ main only
+      // ── Summon aura % for bracket header display ──────────────────────────
+      // Header shows the summon's own aura %, e.g. 100% for Colossus 3★ main
+      optimus_aura_pct: optimus_aura * 100,
+      omega_aura_pct:   omega_aura   * 100,
+      // ── Aura-boosted skill values for skill pills ─────────────────────────
+      // wiki: each skill in Normal bracket is multiplied by (1 + optimus_aura)
+      //       each skill in Omega bracket is multiplied by (1 + omega_aura)
+      //       EX bracket skills are NOT boosted by any summon aura
+      // "Might" pill: normal_sum × (1 + optimus_aura) × 100
+      // "Ω Might" pill: omega_sum × (1 + omega_aura) × 100
+      might_pct:          ((stats.normal_sum || 0) * (1 + optimus_aura)) * 100,
+      omega_might_pct:    ((stats.omega_sum  || 0) * (1 + omega_aura))   * 100,
+      ex_might_pct:       ((stats.ex_sum     || 0))                       * 100,
+      stamina_normal_pct: ((stats.normal_stam || 0) * (1 + optimus_aura)) * 100,
+      stamina_omega_pct:  ((stats.omega_stam  || 0) * (1 + omega_aura))   * 100,
+      stamina_ex_pct:     ((stats.ex_stam     || 0))                       * 100,
+      enmity_normal_pct:  ((stats.normal_enm  || 0) * (1 + optimus_aura)) * 100,
+      enmity_omega_pct:   ((stats.omega_enm   || 0) * (1 + omega_aura))   * 100,
+      enmity_ex_pct:      ((stats.ex_enm      || 0))                       * 100,
+      // HP skill: Aegis (no aura) + Majesty per bracket (with aura)
+      // Matches raidManager HP formula exactly
+      hp_skill_pct: (
+          (stats.hp_aegis_sum  || 0)
+        + (stats.normal_hp_sum || 0) * (1 + optimus_aura)
+        + (stats.omega_hp_sum  || 0) * (1 + omega_aura)
+        + (stats.ex_hp_sum     || 0)
+      ) * 100,
       dmg_cap_na:         (stats.na_cap_bonus  || 0) * 100,
       dmg_cap_ca:         (stats.ca_cap_bonus  || 0) * 100,
-      // Per-bracket stamina/enmity in % — sourced directly from server calcGridStats
-      stamina_normal_pct: (stats.normal_stam || 0) * 100,
-      stamina_omega_pct:  (stats.omega_stam  || 0) * 100,
-      stamina_ex_pct:     (stats.ex_stam     || 0) * 100,
-      enmity_normal_pct:  (stats.normal_enm  || 0) * 100,
-      enmity_omega_pct:   (stats.omega_enm   || 0) * 100,
-      enmity_ex_pct:      (stats.ex_enm      || 0) * 100,
       supplemental:       stats.supp_flat    || 0,
-      // MC stats for Estimated Damage panel:
-      // Estimated DMG = (MC_base_atk + grid_atk) × normal × omega × ex
-      // GBF shows raw ATK output with no DEF divisor — it's a benchmark of offensive power
-      mc_max_hp:    Math.floor((MC_BASE_HP  + (stats.grid_hp  || 0)) * (1 + (stats.hp_skill_sum || 0))),
-      estimated_dmg: Math.round((MC_BASE_ATK + (stats.grid_atk || 0)) * stats.normal_mult * stats.omega_mult * stats.ex_mult),
+      mc_max_hp: Math.floor((MC_BASE_HP + (stats.grid_hp || 0)) * (1 + (
+          (stats.hp_aegis_sum  || 0)
+        + (stats.normal_hp_sum || 0) * (1 + optimus_aura)
+        + (stats.omega_hp_sum  || 0) * (1 + omega_aura)
+        + (stats.ex_hp_sum     || 0)
+      ))),
+      estimated_dmg: Math.round((MC_BASE_ATK + (stats.grid_atk || 0)) * normal_boost * omega_boost * ex_boost),
     };
 
     set({ grid_stats: enriched_stats });
@@ -171,7 +253,24 @@ export const useGameStore = create((set, get) => ({
           target_id: my_state?.target_id ?? s.target_id,
         };
       });
+      for (const ev of (log || [])) get().pushLog({ ...ev, ts: stamp });
+    });
+
+    socket.on('summon_result', ({ log, shared_boss_hp, my_state }) => {
+      const stamp = ts();
+      set(s => ({
+        raid_state: s.raid_state ? { ...s.raid_state, boss: { ...s.raid_state.boss, hp: shared_boss_hp } } : s.raid_state,
+        my_state: my_state || s.my_state,
+      }));
       for (const ev of log) get().pushLog({ ...ev, ts: stamp });
+    });
+
+    socket.on('player_used_summon', ({ player_name, log, shared_boss_hp }) => {
+      const stamp = ts();
+      set(s => ({
+        raid_state: s.raid_state ? { ...s.raid_state, boss: { ...s.raid_state.boss, hp: shared_boss_hp } } : s.raid_state,
+      }));
+      for (const ev of log) get().pushLog({ ...ev, ts: stamp, player_prefix: player_name });
     });
 
     // ── Another player used a skill ────────────────────────────────────────────
@@ -261,8 +360,9 @@ export const useGameStore = create((set, get) => ({
       get().refreshRaidState();
     });
 
-    socket.on('skill_error', (e) => get().pushLog({ type: 'SYSTEM', msg: `Skill error: ${e.error}`, ts: ts() }));
-    socket.on('action_error', (e) => { set({ is_attacking: false }); get().pushLog({ type: 'SYSTEM', msg: `Error: ${e.error}`, ts: ts() }); });
+    socket.on('skill_error',   (e) => get().pushLog({ type: 'SYSTEM', msg: `Skill error: ${e.error}`, ts: ts() }));
+    socket.on('summon_error',  (e) => get().pushLog({ type: 'SYSTEM', msg: `Summon error: ${e.error}`, ts: ts() }));
+    socket.on('action_error',  (e) => { set({ is_attacking: false }); get().pushLog({ type: 'SYSTEM', msg: `Error: ${e.error}`, ts: ts() }); });
     socket.on('error', (e) => console.error('[WS]', e));
 
     set({ socket_ref: socket });
@@ -278,7 +378,8 @@ export const useGameStore = create((set, get) => ({
   },
 
   joinRaid: (room_id) => {
-    const { player_id, player_name, party_character_ids, grid_weapon_ids } = get();
+    const { player_id, player_name, party_character_ids, grid_weapon_ids,
+            main_summon_id, main_summon_stars, sub_summon_id, sub_summon_stars } = get();
     if (!socket?.connected) get().initSocket();
     set({ current_room_id: room_id, turn_log: [], raid_result: null, is_attacking: false, screen: 'battle' });
     setTimeout(() => {
@@ -299,8 +400,19 @@ export const useGameStore = create((set, get) => ({
           charge_attack: mc_class?.charge_attack || null,
           element: grid_weapon_ids.filter(Boolean).length > 0 ? null : 'FIRE', // server will set from main weapon
         },
+        summon_config: {
+          main_id:    main_summon_id,
+          main_stars: main_summon_stars,
+          sub_id:     sub_summon_id,
+          sub_stars:  sub_summon_stars,
+        },
       });
     }, 100);
+  },
+
+  useSummon: () => {
+    const { current_room_id, player_id } = get();
+    socket?.emit('use_summon', { room_id: current_room_id, player_id });
   },
 
   setReady: () => {

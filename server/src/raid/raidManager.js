@@ -9,7 +9,7 @@
 // No time limit.
 // ─────────────────────────────────────────────────────────────────────────────
 import { v4 as uuidv4 } from 'uuid';
-import { BOSSES, CHARACTERS, WEAPONS, MC_CLASSES } from '../data/catalog.js';
+import { BOSSES, CHARACTERS, WEAPONS, SUMMONS } from '../data/catalog.js';
 import { calcGridStats, resolvePlayerAction, resolveBossAction, resolveBossOnEnter, tickAllEffects, checkPhaseTransition } from '../engine/combat.js';
 
 const MAX_PLAYERS = 4;
@@ -189,7 +189,7 @@ export function createRoom({ boss_id, creator_id, creator_name }) {
 }
 
 // ── JOIN ROOM ─────────────────────────────────────────────────────────────────
-export function joinRoom({ room_id, player_id, player_name, party_config, grid_config, mc_config }) {
+export function joinRoom({ room_id, player_id, player_name, party_config, grid_config, mc_config, summon_config }) {
   const room = rooms.get(room_id);
   if (!room) return { error: 'Room not found' };
   if (room.status === 'VICTORY') return { error: 'Raid already completed' };
@@ -226,14 +226,55 @@ export function joinRoom({ room_id, player_id, player_name, party_config, grid_c
 
   const grid_stats = calcGridStats(weapons);
 
-  // Apply grid HP to all characters per GBF wiki:
-  //   effective_hp = (char.base_hp + grid_hp) × (1 + hp_skill_sum)
-  // grid_hp is weapon base HP — adds flatly to every character (same mechanic as grid_atk for ATK)
-  // hp_skill_sum is Aegis + Majesty skill magnitudes — multiplies the combined base
-  const grid_hp = grid_stats.grid_hp || 0;
-  const hp_skill_sum = grid_stats.hp_skill_sum || 0;
+  // ── Summon auras ──────────────────────────────────────────────────────────
+  // Main summon multiplies its bracket (omega_sum or normal_sum).
+  // Sub summon stacks additively on top via its sub_aura_value.
+  // Formula (wiki): omega_boost = 1 + omega_sum × (1 + omega_aura)
+  //                 normal_boost = 1 + normal_sum × (1 + optimus_aura)
+  const getAura = (summon_id, uncap, use_sub) => {
+    if (!summon_id) return 0;
+    const s = SUMMONS.find(s => s.id === summon_id);
+    if (!s) return 0;
+    const stars = Math.max(0, Math.min(5, uncap ?? s.uncap_stars ?? 3));
+    return use_sub ? (s.sub_aura_value[stars] || 0) : (s.aura_value[stars] || 0);
+  };
+
+  const main_id    = summon_config?.main_id;
+  const sub_id     = summon_config?.sub_id;
+  const main_stars = summon_config?.main_stars ?? 3;
+  const sub_stars  = summon_config?.sub_stars  ?? 3;
+  const main_summon = SUMMONS.find(s => s.id === main_id);
+  const sub_summon  = SUMMONS.find(s => s.id === sub_id);
+
+  // Compute total omega_aura and optimus_aura (each sums main + sub contributions)
+  let omega_aura   = 0;
+  let optimus_aura = 0;
+  if (main_summon?.aura_type === 'omega')   omega_aura   += getAura(main_id, main_stars, false);
+  if (main_summon?.aura_type === 'optimus') optimus_aura += getAura(main_id, main_stars, false);
+  if (sub_summon?.aura_type  === 'omega')   omega_aura   += getAura(sub_id,  sub_stars,  true);
+  if (sub_summon?.aura_type  === 'optimus') optimus_aura += getAura(sub_id,  sub_stars,  true);
+
+  // Attach auras to grid_stats so calcDamage can read them each hit
+  grid_stats.omega_aura   = omega_aura;
+  grid_stats.optimus_aura = optimus_aura;
+
+  // Apply HP skill bonus to each character — per GBF wiki:
+  //   effective_hp = (char.base_hp + grid_hp)
+  //                × (1 + hp_aegis_sum
+  //                     + normal_hp_sum × (1 + optimus_aura)
+  //                     + omega_hp_sum  × (1 + omega_aura)
+  //                     + ex_hp_sum)
+  // Aegis (HP_BOOST) has no bracket → no aura multiplication
+  // Majesty HP is in the same bracket as its ATK → same aura multiplier
+  const gs = grid_stats;
+  const total_hp_skill = (gs.hp_aegis_sum  || 0)
+    + (gs.normal_hp_sum || 0) * (1 + optimus_aura)
+    + (gs.omega_hp_sum  || 0) * (1 + omega_aura)
+    + (gs.ex_hp_sum     || 0);
+
+  const grid_hp = gs.grid_hp || 0;
   for (const char of characters) {
-    char.hp_max = Math.floor((char.hp_max + grid_hp) * (1 + hp_skill_sum));
+    char.hp_max = Math.floor((char.hp_max + grid_hp) * (1 + total_hp_skill));
     char.hp = char.hp_max;
   }
 
@@ -250,6 +291,7 @@ export function joinRoom({ room_id, player_id, player_name, party_config, grid_c
     characters,
     weapons,
     grid_stats,
+    summon_config: { main_id, sub_id, main_stars, sub_stars, omega_aura, optimus_aura },
     // Each player has their own local boss state
     local_boss: Object.fromEntries(Object.keys(room.entities).map(eid => [eid, buildBossLocalState(room.entity_defs[eid])])),
     main_boss_id: room.boss_def.id,
@@ -647,6 +689,92 @@ export function getPlayerSnapshot(player) {
       is_mc: c.is_mc || false,
     })),
     grid_stats: player.grid_stats,
+    summon_config: player.summon_config
+      ? { ...player.summon_config, summon_call_used: player.summon_call_used || false }
+      : null,
+  };
+}
+
+// ── USE SUMMON (active call) ──────────────────────────────────────────────────
+export function useSummon(room_id, player_id) {
+  const room = rooms.get(room_id);
+  if (!room || room.status !== 'IN_PROGRESS') return { error: 'Raid not active' };
+  const player = room.players.find(p => p.player_id === player_id);
+  if (!player || player.disconnected) return { error: 'Player not in room' };
+  if (player.summon_call_used) return { error: 'Summon already used this battle' };
+
+  const main_id = player.summon_config?.main_id;
+  const summon  = SUMMONS.find(s => s.id === main_id);
+  if (!summon) return { error: 'No main summon equipped' };
+
+  player.summon_call_used = true;
+  const log = [];
+  const boss_ctx = buildBossContext(room, player);
+
+  // Summon call damage
+  // dmg_type 'massive' = ignores DEF (wiki confirmed — "Massive/Big/Medium quantifier calls ignore DEF")
+  // dmg_type 'skill'   = based on MC skill specs (uses grid multipliers)
+  // dmg_type 'none'    = no damage (pure support, e.g. Yggdrasil)
+  const mc = player.characters[0];
+  const gs = player.grid_stats || {};
+
+  if (summon.call.dmg_type === 'massive') {
+    // Massive calls ignore DEF — base on MC ATK × call_mult, no DEF division
+    const mc_atk = (mc ? mc.base_atk : 1890) + (gs.grid_atk || 0);
+    const call_dmg = Math.round(mc_atk * (gs.normal_mult || 1) * (gs.omega_mult || 1) * (gs.ex_mult || 1) * 2.0);
+    boss_ctx.hp = Math.max(0, boss_ctx.hp - call_dmg);
+    room.shared_boss_hp = Math.max(0, room.shared_boss_hp - call_dmg);
+    log.push({ type: 'SUMMON_CALL', summon_name: summon.name, call_name: summon.call.name, call_dmg });
+  } else if (summon.call.dmg_type === 'skill') {
+    const mc_atk = (mc ? mc.base_atk : 1890) + (gs.grid_atk || 0);
+    const raw = mc_atk * (gs.normal_mult || 1) * (gs.omega_mult || 1) * (gs.ex_mult || 1) * 6.0 / Math.max(1, boss_ctx.def);
+    const call_dmg = Math.round(raw);
+    boss_ctx.hp = Math.max(0, boss_ctx.hp - call_dmg);
+    room.shared_boss_hp = Math.max(0, room.shared_boss_hp - call_dmg);
+    log.push({ type: 'SUMMON_CALL', summon_name: summon.name, call_name: summon.call.name, call_dmg });
+  } else {
+    // No damage — pure support call (e.g. Yggdrasil)
+    log.push({ type: 'SUMMON_CALL', summon_name: summon.name, call_name: summon.call.name, call_dmg: 0 });
+  }
+
+  // Apply primary effect
+  if (summon.call.effect) {
+    const { type, amount, duration, target } = summon.call.effect;
+    if (target === 'foe') {
+      applyStatusEffect(boss_ctx, { type, amount, duration });
+      log.push({ type: 'DEBUFF_APPLIED', effect: summon.call.effect, target: 'boss' });
+    } else {
+      applyStatusEffect(player, { type, amount, duration, target_id: 'party' });
+      log.push({ type: 'BUFF_APPLIED', effect: summon.call.effect, target: 'party' });
+    }
+  }
+
+  // Apply secondary effect (e.g. Yggdrasil regen)
+  if (summon.call.effect2) {
+    const { type, heal, duration, target } = summon.call.effect2;
+    if (target === 'party') {
+      // Apply regen to all characters
+      for (const char of player.characters) {
+        if (char.hp > 0) {
+          applyStatusEffect(char, { type, heal, duration });
+        }
+      }
+      log.push({ type: 'BUFF_APPLIED', effect: summon.call.effect2, target: 'party' });
+    }
+  }
+
+  syncBossContext(room, player, boss_ctx);
+  if (room.shared_boss_hp <= 0) {
+    room.status = 'VICTORY';
+    buildRewards(room);
+  }
+
+  return {
+    ok: true,
+    log,
+    shared_boss_hp: room.shared_boss_hp,
+    victory: room.status === 'VICTORY',
+    rewards: room.rewards || null,
   };
 }
 

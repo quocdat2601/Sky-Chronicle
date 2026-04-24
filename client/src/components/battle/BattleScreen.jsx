@@ -32,11 +32,12 @@ function VFXCanvas({ canvasRef }) {
 export function BattleScreen() {
   const {
     player_id, raid_state, my_state, turn_log,
-    setReady, useAbility, doAttack, is_attacking,
+    setReady, useAbility, doAttack, useSummon, is_attacking,
     chain_burst_anim, phase_anim, raid_result,
     setScreen, current_room_id, refreshRaidState, catalog_characters,
     catalog_mc_classes, mc_class_id, mc_selected_skills,
     target_id, setTargetId,
+    catalog_summons,
   } = useGameStore();
 
   const [selected_char_id, setSelectedCharId]   = useState(null);
@@ -344,8 +345,13 @@ export function BattleScreen() {
               char={selected_char}
               cat_char={cat_selected_char}
               grid_stats={my_state?.grid_stats}
+              summon_config={my_state?.summon_config}
+              summon_call_used={my_state?.summon_config?.summon_call_used || false}
+              catalog_summons={catalog_summons}
+              main_summon_id={my_state?.summon_config?.main_id || null}
               is_attacking={is_attacking}
-              onUseAbility={(ab_id,ab_name)=>handleAbility(selected_char.id,ab_id,ab_name)}
+              onUseAbility={(ab_id, ab_name) => handleAbility(selected_char.id, ab_id, ab_name)}
+              onUseSummon={useSummon}
               onAttack={doAttack}
             />
           ) : is_active && i_am_defeated ? (
@@ -628,6 +634,10 @@ function SkillCard({ ab, runtime_char, dead, is_preset, onUseAbility }) {
     : '↓';
   const rgb = ab.effect_type==='DAMAGE'?'255,80,32':ab.effect_type==='BUFF'?'64,144,255':ab.effect_type==='HEAL'?'56,224,96':'192,96,255';
 
+  // Summon call info
+  const main_def       = catalog_summons?.find(s => s.id === main_summon_id);
+  const can_call       = !!main_def && !summon_call_used && !is_attacking;
+
   return (
     <div style={{
       borderRadius:10, overflow:'hidden',
@@ -896,7 +906,7 @@ function MCDetailPanel({ mc_char, mc_class, grid_stats, is_attacking, onAttack, 
 // ═══════════════════════════════════════════════════════════════════════
 // CHAR DETAIL PANEL — same SkillCard with collapsible description
 // ═══════════════════════════════════════════════════════════════════════
-function CharDetailPanel({ char, cat_char, grid_stats, is_attacking, onUseAbility, onAttack }) {
+function CharDetailPanel({ char, cat_char, grid_stats, summon_config, summon_call_used, catalog_summons, main_summon_id, is_attacking, onUseAbility, onUseSummon, onAttack }) {
   const dead      = char.hp <= 0;
   const hp_pct    = char.hp / char.hp_max;
   const hp_cls    = hp_pct > 0.6 ? '' : hp_pct > 0.3 ? ' yellow' : ' red';
@@ -905,6 +915,9 @@ function CharDetailPanel({ char, cat_char, grid_stats, is_attacking, onUseAbilit
   const eff_atk = char.base_atk && grid_stats
     ? Math.round((char.base_atk + (grid_stats.grid_atk || 0)) * (grid_stats.normal_mult || 1) * (grid_stats.omega_mult || 1) * (grid_stats.ex_mult || 1))
     : null;
+  const summon_main_id = summon_config?.main_id || main_summon_id;
+  const main_def = catalog_summons?.find(s => s.id === summon_main_id);
+  const can_call = !!main_def && !summon_call_used && !is_attacking;
 
   return (
     <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',background:'var(--bg-deep)'}}>
@@ -1003,19 +1016,58 @@ function CharDetailPanel({ char, cat_char, grid_stats, is_attacking, onUseAbilit
         )}
       </div>
 
-      {/* Attack button */}
-      <div style={{padding:'10px 14px',borderTop:'1px solid var(--border-dim)',flexShrink:0,
-        background:'var(--bg-panel)',display:'flex',gap:10,alignItems:'center'}}>
-        <div style={{fontSize:'0.6rem',color:is_attacking?'var(--charge-blue)':'var(--gold-bright)',
-          fontFamily:'var(--font-mono)',flex:1}}>
-          {is_attacking ? '⚔ Resolving turn...' : 'Use skills freely, then press Attack to end your turn'}
+      <div style={{ padding:'10px 14px', borderTop:'1px solid var(--border-dim)', flexShrink:0,
+        background:'var(--bg-panel)', display:'flex', flexDirection:'column', gap:8 }}>
+
+        {/* Summon call button — shows only when a main summon is equipped */}
+        {main_def && (
+          <button
+            onClick={() => can_call && onUseSummon()}
+            disabled={!can_call}
+            style={{
+              width:'100%', padding:'7px 12px', borderRadius:8, fontSize:'0.68rem',
+              fontFamily:'var(--font-mono)', letterSpacing:'0.04em', cursor: can_call ? 'pointer' : 'default',
+              border:`1px solid ${can_call ? 'rgba(160,100,255,0.5)' : 'var(--border-dim)'}`,
+              background: can_call ? 'rgba(120,60,220,0.15)' : 'rgba(255,255,255,0.02)',
+              color: can_call ? '#c090ff' : 'var(--text-dim)',
+              display:'flex', alignItems:'center', justifyContent:'space-between',
+              opacity: summon_call_used ? 0.45 : 1,
+            }}>
+            <span>💎 {main_def.name}</span>
+            <span style={{ fontSize:'0.6rem' }}>
+              {summon_call_used
+                ? 'USED'
+                : (() => {
+                    const stars = summon_config?.main_stars ?? 3;
+                    const key   = stars >= 5 ? 5 : stars >= 4 ? 4 : 0;
+                    const desc  = main_def.call.description_by_uncap?.[key]
+                               ?? main_def.call.description_by_uncap?.[0]
+                               ?? main_def.call.name;
+                    return `${main_def.call.name} · ${desc.split('.')[0]}`;
+                  })()
+              }
+            </span>
+          </button>
+        )}
+
+        <div style={{ display:'flex', gap:10, alignItems:'center' }}>
+          <div style={{ fontSize:'0.6rem', color: is_attacking ? 'var(--charge-blue)' : 'var(--gold-bright)',
+            fontFamily:'var(--font-mono)', flex:1 }}>
+            {is_attacking ? '⚔ Resolving turn...' : 'Use skills freely, then press Attack to end your turn'}
+          </div>
+          <button
+            className="btn btn-primary"
+            style={{ padding:'12px 32px', fontSize:'0.9rem', letterSpacing:'0.06em',
+              opacity: is_attacking ? 0.5 : 1,
+              boxShadow: is_attacking ? 'none' : '0 0 22px rgba(32,96,184,0.5)',
+              flexShrink:0,
+            }}
+            disabled={is_attacking}
+            onClick={onAttack}
+          >
+            {is_attacking ? '⚔ Attacking...' : '⚔ ATTACK'}
+          </button>
         </div>
-        <button className="btn btn-primary"
-          style={{padding:'12px 32px',fontSize:'0.9rem',letterSpacing:'0.06em',flexShrink:0,
-            opacity:is_attacking?0.5:1,boxShadow:is_attacking?'none':'0 0 22px rgba(32,96,184,0.5)'}}
-          disabled={is_attacking} onClick={onAttack}>
-          {is_attacking ? '⚔ Attacking...' : '⚔ ATTACK'}
-        </button>
       </div>
     </div>
   );

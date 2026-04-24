@@ -15,12 +15,14 @@ function skillMag(sk) {
 // ── MAIN PAGE ─────────────────────────────────────────────────────────────────
 export function PartyPage() {
   const {
-    catalog_characters, catalog_weapons, catalog_mc_classes, loadCatalog,
+    catalog_characters, catalog_weapons, catalog_mc_classes, catalog_summons, loadCatalog,
     party_character_ids, setPartyCharacters,
     grid_weapon_ids, setGridWeapon, clearGridSlot,
     grid_stats, calculateGridStats,
     mc_class_id, setMcClass,
     mc_selected_skills, setMcSelectedSkills,
+    main_summon_id, main_summon_stars, setMainSummon,
+    sub_summon_id,  sub_summon_stars,  setSubSummon,
     setScreen,
   } = useGameStore();
 
@@ -41,6 +43,7 @@ export function PartyPage() {
 
   useEffect(() => { loadCatalog(); calculateGridStats(); }, []);
   useEffect(() => { calculateGridStats(); }, [grid_weapon_ids]);
+  useEffect(() => { calculateGridStats(); }, [main_summon_id, main_summon_stars, sub_summon_id, sub_summon_stars]);
 
   const main_ids    = party_character_ids.filter(Boolean);
   const getChar     = id => catalog_characters.find(c => c.id === id);
@@ -1643,18 +1646,251 @@ function WeaponPickerCard({ weapon, in_grid, clickable, onPick }) {
 }
 
 // ── TAB C: SUMMON ─────────────────────────────────────────────────────────────
+const AURA_TYPE_LABEL = { omega: 'Ω Aura', optimus: 'Normal Aura' };
+const AURA_TYPE_COLOR = { omega: 'var(--charge-blue)', optimus: 'var(--text-gold)' };
+
 function SummonTab() {
+  const {
+    catalog_summons,
+    main_summon_id, main_summon_stars, setMainSummon,
+    sub_summon_id,  sub_summon_stars,  setSubSummon,
+  } = useGameStore();
+
+  const [slot,        setSlot]        = useState(null); // 'main'|'sub'|null
+  const [filter_elem, setFilterElem]  = useState('ALL');
+
+  const getSummon = id => catalog_summons.find(s => s.id === id);
+  const main_def  = getSummon(main_summon_id);
+  const sub_def   = getSummon(sub_summon_id);
+
+  // Compute effective aura values for display
+  const getAuraVal = (def, stars, is_sub) => {
+    if (!def) return 0;
+    const idx = Math.max(0, Math.min(5, stars ?? 3));
+    return is_sub ? (def.sub_aura_value?.[idx] || 0) : (def.aura_value?.[idx] || 0);
+  };
+  const main_aura = getAuraVal(main_def, main_summon_stars, false);
+  const sub_aura  = getAuraVal(sub_def,  sub_summon_stars,  true);
+
+  // Total aura per type shown in banner
+  const omega_total   = (main_def?.aura_type === 'omega'   ? main_aura : 0)
+                      + (sub_def?.aura_type  === 'omega'   ? sub_aura  : 0);
+  const optimus_total = (main_def?.aura_type === 'optimus' ? main_aura : 0)
+                      + (sub_def?.aura_type  === 'optimus' ? sub_aura  : 0);
+
+  const filtered = catalog_summons.filter(s =>
+    filter_elem === 'ALL' || s.element === filter_elem
+  );
+
+  const ELEMS = ['ALL','FIRE','WATER','EARTH','WIND','LIGHT','DARK'];
+
+  if (slot) {
+    // ── PICKER ──────────────────────────────────────────────────────────────
+    return (
+      <div style={{ height:'100%', display:'flex', flexDirection:'column', overflow:'hidden' }}>
+        {/* Header */}
+        <div style={{ padding:'10px 14px', borderBottom:'1px solid var(--border-dim)', flexShrink:0,
+          display:'flex', alignItems:'center', gap:10 }}>
+          <button className="btn btn-ghost btn-sm" onClick={() => setSlot(null)}>← Back</button>
+          <span style={{ fontFamily:'var(--font-display)', fontSize:'0.85rem', color:'var(--text-gold)' }}>
+            Select {slot === 'main' ? 'Main' : 'Sub'} Summon
+          </span>
+        </div>
+        {/* Element filter */}
+        <div style={{ display:'flex', gap:5, padding:'8px 12px', flexShrink:0, flexWrap:'wrap',
+          borderBottom:'1px solid var(--border-dim)' }}>
+          {ELEMS.map(el => (
+            <button key={el} onClick={() => setFilterElem(el)}
+              className={`btn btn-sm ${filter_elem === el ? 'btn-primary' : 'btn-ghost'}`}
+              style={{ fontSize:'0.6rem', padding:'2px 8px' }}>
+              {el}
+            </button>
+          ))}
+        </div>
+        {/* None option */}
+        <div style={{ overflowY:'auto', flex:1, padding:'8px 12px', display:'flex', flexDirection:'column', gap:6 }}>
+          <div onClick={() => { slot === 'main' ? setMainSummon(null) : setSubSummon(null); setSlot(null); }}
+            style={{ padding:'10px 14px', borderRadius:8, cursor:'pointer', border:'1px solid var(--border-dim)',
+              background:'rgba(255,255,255,0.03)', fontSize:'0.75rem', color:'var(--text-dim)' }}>
+            None (no summon)
+          </div>
+          {filtered.map(s => {
+            const stars      = slot === 'main' ? main_summon_stars : sub_summon_stars;
+            const aura_val   = getAuraVal(s, stars, slot === 'sub');
+            const is_sel     = (slot === 'main' ? main_summon_id : sub_summon_id) === s.id;
+            return (
+              <div key={s.id}
+                onClick={() => {
+                  if (slot === 'main') setMainSummon(s.id, main_summon_stars);
+                  else setSubSummon(s.id, sub_summon_stars);
+                  setSlot(null);
+                }}
+                style={{
+                  padding:'10px 14px', borderRadius:8, cursor:'pointer',
+                  border:`1px solid ${is_sel ? 'var(--text-gold)' : 'var(--border-dim)'}`,
+                  background: is_sel ? 'rgba(200,160,0,0.08)' : 'rgba(255,255,255,0.03)',
+                  display:'flex', alignItems:'center', gap:12,
+                }}>
+                {/* Element orb */}
+                <div style={{ width:36, height:36, borderRadius:'50%', flexShrink:0,
+                  background:`radial-gradient(circle at 35% 35%, rgba(255,255,255,0.25), transparent)`,
+                  border:`2px solid ${ELEM_COLORS[s.element] || '#666'}`,
+                  display:'flex', alignItems:'center', justifyContent:'center', fontSize:'1.1rem' }}>
+                  {ELEM_EMOJI[s.element]}
+                </div>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontFamily:'var(--font-display)', fontSize:'0.8rem',
+                    fontWeight:700, color:'var(--text-bright)', marginBottom:2 }}>{s.name}</div>
+                  <div style={{ fontSize:'0.6rem', color:AURA_TYPE_COLOR[s.aura_type] }}>
+                    {(aura_val * 100).toFixed(0)}% {s.aura_label || AURA_TYPE_LABEL[s.aura_type]} at {stars}★
+                  </div>
+                  <div style={{ fontSize:'0.58rem', color:'var(--text-dim)', marginTop:1 }}>
+                    {s.call.name}
+                  </div>
+                </div>
+                {is_sel && <span style={{ color:'var(--text-gold)', fontSize:'0.9rem' }}>✓</span>}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  // ── MAIN VIEW ─────────────────────────────────────────────────────────────
   return (
-    <div style={{ height:'100%', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:12, padding:24 }}>
-      <div style={{ fontSize:'3rem', opacity:0.3 }}>💎</div>
-      <div style={{ fontFamily:'var(--font-display)', fontSize:'1rem', color:'var(--text-dim)' }}>Summon Grid</div>
-      <div style={{ fontSize:'0.78rem', color:'var(--text-dim)', fontStyle:'italic', textAlign:'center', maxWidth:300, lineHeight:1.6 }}>
-        Summons provide passive aura bonuses to your party.<br/>Main summon can be called once per battle for a powerful active effect.
+    <div style={{ height:'100%', overflowY:'auto', padding:'12px 14px', display:'flex', flexDirection:'column', gap:14 }}>
+
+      {/* Aura banner */}
+      {(omega_total > 0 || optimus_total > 0) && (
+        <div style={{ display:'flex', gap:8 }}>
+          {omega_total > 0 && (
+            <div style={{ flex:1, padding:'8px 12px', borderRadius:8,
+              background:'rgba(80,140,255,0.08)', border:'1px solid rgba(80,140,255,0.2)',
+              display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <span style={{ fontSize:'0.62rem', color:'var(--charge-blue)', fontFamily:'var(--font-mono)' }}>Ω Aura Total</span>
+              <span style={{ fontSize:'0.85rem', fontWeight:700, color:'var(--charge-blue)', fontFamily:'var(--font-mono)' }}>
+                {(omega_total * 100).toFixed(0)}%
+              </span>
+            </div>
+          )}
+          {optimus_total > 0 && (
+            <div style={{ flex:1, padding:'8px 12px', borderRadius:8,
+              background:'rgba(200,160,0,0.08)', border:'1px solid rgba(200,160,0,0.2)',
+              display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <span style={{ fontSize:'0.62rem', color:'var(--text-gold)', fontFamily:'var(--font-mono)' }}>Normal Aura Total</span>
+              <span style={{ fontSize:'0.85rem', fontWeight:700, color:'var(--text-gold)', fontFamily:'var(--font-mono)' }}>
+                {(optimus_total * 100).toFixed(0)}%
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Main summon slot */}
+      <SummonSlotCard
+        label="MAIN SUMMON"
+        subtitle="Active call · Passive aura"
+        summon_def={main_def}
+        stars={main_summon_stars}
+        is_sub={false}
+        getAuraVal={getAuraVal}
+        onSelect={() => setSlot('main')}
+        onStarsChange={n => setMainSummon(main_summon_id, n)}
+      />
+
+      {/* Sub summon slot */}
+      <SummonSlotCard
+        label="SUB SUMMON"
+        subtitle="Passive aura only (50%)"
+        summon_def={sub_def}
+        stars={sub_summon_stars}
+        is_sub={true}
+        getAuraVal={getAuraVal}
+        onSelect={() => setSlot('sub')}
+        onStarsChange={n => setSubSummon(sub_summon_id, n)}
+      />
+
+      {/* Formula note */}
+      <div style={{ padding:'10px 14px', borderRadius:8, background:'rgba(255,255,255,0.02)',
+        border:'1px solid var(--border-dim)', fontSize:'0.6rem', color:'var(--text-dim)', lineHeight:1.7 }}>
+        <span style={{ color:'var(--charge-blue)' }}>Ω bracket</span>: 1 + omega_sum × (1 + Ω Aura)
+        <br/>
+        <span style={{ color:'var(--text-gold)' }}>Normal bracket</span>: 1 + normal_sum × (1 + Normal Aura)
+        <br/>
+        Same aura type from sub summon stacks additively with main.
       </div>
-      <div style={{ padding:'8px 20px', borderRadius:20, background:'rgba(100,100,100,0.1)',
-        border:'1px solid var(--border-dim)', fontSize:'0.72rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)' }}>
-        Coming in v2.0
+    </div>
+  );
+}
+
+const ELEM_COLORS = { FIRE:'#ff6030', WATER:'#40aaff', EARTH:'#80b040', WIND:'#50e0a0', LIGHT:'#ffdd60', DARK:'#9060c0' };
+
+function SummonSlotCard({ label, subtitle, summon_def, stars, is_sub, getAuraVal, onSelect, onStarsChange }) {
+  const aura_val = getAuraVal(summon_def, stars, is_sub);
+
+  return (
+    <div style={{ borderRadius:10, border:'1px solid var(--border-dim)',
+      background:'rgba(255,255,255,0.02)', overflow:'hidden' }}>
+      {/* Slot header */}
+      <div style={{ padding:'6px 12px', borderBottom:'1px solid var(--border-dim)',
+        display:'flex', justifyContent:'space-between', alignItems:'center',
+        background:'rgba(255,255,255,0.02)' }}>
+        <span style={{ fontSize:'0.55rem', fontFamily:'var(--font-mono)', color:'var(--text-dim)',
+          letterSpacing:'0.08em' }}>{label}</span>
+        <span style={{ fontSize:'0.55rem', color:'var(--text-dim)' }}>{subtitle}</span>
       </div>
+
+      {summon_def ? (
+        <div style={{ padding:'12px', display:'flex', gap:12, alignItems:'flex-start' }}>
+          {/* Portrait orb */}
+          <div onClick={onSelect} style={{ width:56, height:56, flexShrink:0, borderRadius:10, cursor:'pointer',
+            background:`radial-gradient(circle at 35% 30%, rgba(255,255,255,0.15), transparent 60%), ${ELEM_COLORS[summon_def.element] || '#444'}22`,
+            border:`2px solid ${ELEM_COLORS[summon_def.element] || 'var(--border-dim)'}`,
+            display:'flex', alignItems:'center', justifyContent:'center', fontSize:'1.6rem' }}>
+            {ELEM_EMOJI[summon_def.element]}
+          </div>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontFamily:'var(--font-display)', fontSize:'0.88rem', fontWeight:700,
+              color:'var(--text-bright)', marginBottom:2 }}>{summon_def.name}</div>
+            {/* Aura type + value */}
+            <div style={{ fontSize:'0.62rem', color: AURA_TYPE_COLOR[summon_def.aura_type], marginBottom:6 }}>
+              +{(aura_val * 100).toFixed(0)}% {summon_def.aura_label || AURA_TYPE_LABEL[summon_def.aura_type]}
+            </div>
+            {/* Call description (main only) — shows correct text for current uncap level */}
+            {!is_sub && (
+              <div style={{ fontSize:'0.6rem', color:'var(--text-dim)', marginBottom:8, lineHeight:1.5 }}>
+                <span style={{ color:'var(--text-mid)' }}>{summon_def.call.name}:</span>{' '}
+                {(summon_def.call.description_by_uncap?.[stars >= 5 ? 5 : stars >= 4 ? 4 : 0])
+                  ?? summon_def.call.description_by_uncap?.[0]}
+              </div>
+            )}
+            {/* Stars selector */}
+            <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+              <span style={{ fontSize:'0.55rem', color:'var(--text-dim)', fontFamily:'var(--font-mono)' }}>UNCAP</span>
+              <div style={{ display:'flex', gap:3 }}>
+                {[0,1,2,3,4,5].map(n => (
+                  <button key={n} onClick={() => onStarsChange(n)}
+                    style={{ width:18, height:18, borderRadius:3, border:'none', cursor:'pointer', fontSize:'0.55rem',
+                      background: stars >= n ? 'var(--text-gold)' : 'rgba(255,255,255,0.06)',
+                      color: stars >= n ? '#000' : 'var(--text-dim)' }}>
+                    {n}★
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={onSelect}
+            style={{ fontSize:'0.6rem', flexShrink:0 }}>Change</button>
+        </div>
+      ) : (
+        <div onClick={onSelect} style={{ padding:'18px 14px', display:'flex', alignItems:'center',
+          justifyContent:'center', gap:10, cursor:'pointer', color:'var(--text-dim)',
+          fontSize:'0.75rem' }}>
+          <span style={{ fontSize:'1.4rem', opacity:0.3 }}>💎</span>
+          Tap to select summon
+        </div>
+      )}
     </div>
   );
 }
@@ -1686,22 +1922,24 @@ function BottomNav({ ally_count, weapon_count, onBack, onConfirm }) {
 function GridStatsPanel({ grid_stats, main_element }) {
   if (!grid_stats) return null;
 
-  // 1. Danh sách tất cả các chỉ số tiềm năng dựa trên constants.js
+  // Skill pills show aura-boosted values: each Normal/Omega skill × (1 + aura)
+  // wiki: "100% + (30.8% Weapon Skills × 100% Colossus' Aura) = 130.8% total"
+  // We show the weapon skill contribution after aura: 30.8% × 2.0 = 61.6% for Ω Might
   const allPossibleBoosts = [
-    { label: "Might",       val: (grid_stats.normal_mult - 1) * 100,        color: "var(--text-mid)"     },
-    { label: "Ω Might",     val: (grid_stats.omega_mult  - 1) * 100,        color: "var(--charge-blue)"  },
-    { label: "EX Might",    val: (grid_stats.ex_mult     - 1) * 100,        color: "var(--text-gold)"    },
-    { label: "Stamina",     val: grid_stats.stamina_normal_pct || 0,         color: "var(--hp-green)"     },
-    { label: "Ω Stamina",   val: grid_stats.stamina_omega_pct  || 0,         color: "#4fc3f7"             },
-    { label: "EX Stamina",  val: grid_stats.stamina_ex_pct     || 0,         color: "#ffd54f"             },
-    { label: "Enmity",      val: grid_stats.enmity_normal_pct  || 0,         color: "var(--hp-red)"       },
-    { label: "Ω Enmity",    val: grid_stats.enmity_omega_pct   || 0,         color: "#ef9a9a"             },
-    { label: "EX Enmity",   val: grid_stats.enmity_ex_pct      || 0,         color: "#ff8a65"             },
-    { label: "HP Skill",    val: grid_stats.hp_skill_pct        || 0,         color: "#60cc60"             },
-    { label: "Critical",    val: (grid_stats.crit_rate || 0) * 100,          color: "var(--crit-orange)"  },
-    { label: "NA Cap",      val: grid_stats.dmg_cap_na          || 0,         color: "var(--text-gold)"    },
-    { label: "CA Cap",      val: grid_stats.dmg_cap_ca          || 0,         color: "var(--text-gold)"    },
-    { label: "DMG Supp.",   val: grid_stats.supplemental         || 0,         color: "var(--text-gold)", isFlat: true },
+    { label: "Might",       val: grid_stats.might_pct          || 0,  color: "var(--text-mid)"     },
+    { label: "Ω Might",     val: grid_stats.omega_might_pct    || 0,  color: "var(--charge-blue)"  },
+    { label: "EX Might",    val: grid_stats.ex_might_pct       || 0,  color: "var(--text-gold)"    },
+    { label: "Stamina",     val: grid_stats.stamina_normal_pct || 0,  color: "var(--hp-green)"     },
+    { label: "Ω Stamina",   val: grid_stats.stamina_omega_pct  || 0,  color: "#4fc3f7"             },
+    { label: "EX Stamina",  val: grid_stats.stamina_ex_pct     || 0,  color: "#ffd54f"             },
+    { label: "Enmity",      val: grid_stats.enmity_normal_pct  || 0,  color: "var(--hp-red)"       },
+    { label: "Ω Enmity",    val: grid_stats.enmity_omega_pct   || 0,  color: "#ef9a9a"             },
+    { label: "EX Enmity",   val: grid_stats.enmity_ex_pct      || 0,  color: "#ff8a65"             },
+    { label: "HP Skill",    val: grid_stats.hp_skill_pct       || 0,  color: "#60cc60"             },
+    { label: "Critical",    val: (grid_stats.crit_rate || 0) * 100,   color: "var(--crit-orange)"  },
+    { label: "NA Cap",      val: grid_stats.dmg_cap_na         || 0,  color: "var(--text-gold)"    },
+    { label: "CA Cap",      val: grid_stats.dmg_cap_ca         || 0,  color: "var(--text-gold)"    },
+    { label: "DMG Supp.",   val: grid_stats.supplemental       || 0,  color: "var(--text-gold)", isFlat: true },
   ];
 
   // Filter: only show boosts with non-zero values
@@ -1735,30 +1973,23 @@ function GridStatsPanel({ grid_stats, main_element }) {
         </div>
       </div>
 
-      {/* ZONE 2: Aura Boosts (Elemental Multipliers) */}
-      <div style={{ display: 'flex', justifyContent: 'space-around', paddingBottom: '15px', borderBottom: '1px solid var(--border-dim)', marginBottom: '15px' }}>
-  {['normal', 'omega', 'ex'].map(type => {
-    // Lấy giá trị aura từ grid_stats, mặc định là 1.0 (100%)
-    const auraVal = grid_stats[`${type}_aura`] || 1.0;
-    
-    // Tính toán % hiển thị: (Giá trị - 1.0) * 100
-    // Ví dụ: 1.0 -> 0%, 2.4 -> 140%
-    const displayAura = ((auraVal - 1.0) * 100).toFixed(0) + '%';
-
-    return (
-      <div key={type} style={{ textAlign: 'center' }}>
-        <div style={{ fontSize: '0.55rem', color: 'var(--text-dim)', textTransform: 'uppercase' }}>{type} Aura</div>
-        <div style={{ 
-          fontSize: '0.85rem', 
-          fontWeight: 700, 
-          color: type === 'omega' ? 'var(--charge-blue)' : type === 'ex' ? 'var(--text-gold)' : 'var(--text-bright)' 
-        }}>
-          {displayAura}
-        </div>
+      {/* ZONE 2: Summon aura headers + final bracket totals */}
+      {/* Header = summon aura %, e.g. 100% for Colossus 3★ (what the summon adds to the bracket multiplier) */}
+      <div style={{ display:'flex', justifyContent:'space-around', paddingBottom:'15px',
+        borderBottom:'1px solid var(--border-dim)', marginBottom:'15px' }}>
+        {[
+          { label:'Normal Aura', aura_pct: grid_stats.optimus_aura_pct || 0, color:'var(--text-bright)' },
+          { label:'Omega Aura',  aura_pct: grid_stats.omega_aura_pct   || 0, color:'var(--charge-blue)' },
+          { label:'EX Aura',     aura_pct: 0,                               color:'var(--text-gold)'   },
+        ].map(({ label, aura_pct, color }) => (
+          <div key={label} style={{ textAlign:'center' }}>
+            <div style={{ fontSize:'0.5rem', color:'var(--text-dim)', textTransform:'uppercase', marginBottom:2 }}>{label}</div>
+            <div style={{ fontSize:'0.85rem', fontWeight:700, color, fontFamily:'var(--font-mono)' }}>
+              {aura_pct.toFixed(0)}%
+            </div>
+          </div>
+        ))}
       </div>
-    );
-  })}
-</div>
 
       {/* ZONE 3: Danh sách Kỹ năng dạng Pill (Không dùng icon) */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 12px' }}>
