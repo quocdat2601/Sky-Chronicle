@@ -3,7 +3,7 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 
-import { CHARACTERS, WEAPONS, BOSSES } from './data/catalog.js';
+import { CHARACTERS, WEAPONS, BOSSES, MC_CLASSES } from './data/catalog.js';
 import { calcGridStats } from './engine/combat.js';
 import {
   createRoom, joinRoom, setPlayerReady,
@@ -25,6 +25,7 @@ const io = new Server(httpServer, {
 // ── REST ──────────────────────────────────────────────────────────────────────
 app.get('/api/catalog/characters', (_, res) => res.json(CHARACTERS));
 app.get('/api/catalog/weapons',    (_, res) => res.json(WEAPONS));
+app.get('/api/catalog/mc-classes', (_, res) => res.json(MC_CLASSES));
 app.get('/api/catalog/bosses',     (_, res) => res.json(BOSSES.map(b => ({
   id: b.id, name: b.name, element: b.element, hp_max: b.hp_max,
 }))));

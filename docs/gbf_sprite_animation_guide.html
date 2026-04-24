@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GBF Sprite & Animation System — Research & Integration Guide</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;900&family=Crimson+Pro:ital,wght@0,300;0,400;0,600;1,300&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#06080F;--bg2:#0C1020;--bg3:#121828;
+  --border:#1E2A42;--gold:#E2B04A;--gold2:#F0D080;
+  --text:#C8D0E0;--dim:#5A6A8A;--teal:#26C6DA;
+  --green:#4CAF50;--red:#F44336;--orange:#FF9800;--blue:#42A5F5;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Crimson Pro',serif;line-height:1.7}
+.wrap{max-width:1100px;margin:0 auto;padding:40px 20px 80px}
+h1{font-family:'Cinzel',serif;font-size:clamp(20px,3vw,34px);color:var(--gold);text-align:center;
+   letter-spacing:.08em;text-shadow:0 0 40px rgba(226,176,74,.35);margin-bottom:8px}
+.sub{text-align:center;color:var(--dim);font-size:13px;font-style:italic;margin-bottom:48px}
+.stitle{font-family:'Cinzel',serif;font-size:11px;color:var(--dim);letter-spacing:.18em;
+        text-transform:uppercase;margin:48px 0 20px;display:flex;align-items:center;gap:10px}
+.stitle::before,.stitle::after{content:'';flex:1;height:1px;background:var(--border)}
+/* Blocks */
+.block{background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:22px;margin-bottom:16px}
+.block-title{font-family:'Cinzel',serif;font-size:13px;color:var(--gold);font-weight:600;
+             letter-spacing:.08em;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
+@media(max-width:700px){.grid2,.grid3{grid-template-columns:1fr}}
+p{font-size:13px;line-height:1.75;color:var(--text);margin-bottom:10px}
+p:last-child{margin-bottom:0}
+strong{color:var(--gold2)}
+em{color:var(--dim)}
+code{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--teal);
+     background:rgba(0,0,0,.45);padding:2px 5px;border-radius:2px;word-break:break-all}
+pre{background:rgba(0,0,0,.6);border:1px solid var(--border);border-radius:4px;
+    padding:16px;overflow-x:auto;margin:12px 0}
+pre code{background:none;padding:0;font-size:11px;color:#A8D8EA;line-height:1.6}
+.tag{display:inline-block;font-size:10px;font-family:'JetBrains Mono',monospace;
+     padding:2px 8px;border-radius:2px;margin:2px 2px 0 0}
+.tg{background:rgba(39,174,96,.2);color:#80E880;border:1px solid rgba(39,174,96,.35)}
+.tb{background:rgba(66,165,245,.2);color:#90CAF9;border:1px solid rgba(66,165,245,.35)}
+.tr{background:rgba(244,67,54,.2);color:#FF8A80;border:1px solid rgba(244,67,54,.35)}
+.to{background:rgba(255,152,0,.2);color:#FFCC80;border:1px solid rgba(255,152,0,.35)}
+.tgold{background:rgba(226,176,74,.15);color:var(--gold);border:1px solid rgba(226,176,74,.35)}
+/* Step list */
+.steps{counter-reset:step;list-style:none;padding:0}
+.steps li{counter-increment:step;padding:12px 14px 12px 52px;position:relative;
+          border-left:2px solid var(--border);margin-bottom:8px;font-size:13px}
+.steps li::before{content:counter(step);position:absolute;left:-14px;top:10px;
+                  width:26px;height:26px;border-radius:50%;background:var(--bg3);
+                  border:1px solid var(--border);color:var(--gold);
+                  font-family:'Cinzel',serif;font-weight:600;font-size:11px;
+                  display:flex;align-items:center;justify-content:center}
+/* Warning / info boxes */
+.warn{background:rgba(244,67,54,.08);border:1px solid rgba(244,67,54,.3);
+      border-radius:4px;padding:14px 16px;font-size:13px;color:#FF8A80;margin:12px 0}
+.info{background:rgba(66,165,245,.07);border:1px solid rgba(66,165,245,.3);
+      border-radius:4px;padding:14px 16px;font-size:13px;color:#90CAF9;margin:12px 0}
+.success{background:rgba(39,174,96,.07);border:1px solid rgba(39,174,96,.3);
+         border-radius:4px;padding:14px 16px;font-size:13px;color:#80E880;margin:12px 0}
+/* Flow diagram */
+.flow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:12px 0}
+.flow-box{background:var(--bg3);border:1px solid var(--border);border-radius:3px;
+          padding:8px 12px;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text)}
+.flow-arrow{color:var(--dim);font-size:16px}
+.flow-box.hi{border-color:var(--gold);color:var(--gold)}
+.flow-box.ok{border-color:var(--green);color:#80E880}
+.flow-box.warn2{border-color:var(--orange);color:#FFCC80}
+/* URL pattern */
+.url-box{background:rgba(0,0,0,.5);border:1px solid rgba(38,198,218,.25);border-radius:4px;
+         padding:12px 16px;margin:10px 0;font-family:'JetBrains Mono',monospace;font-size:11px;
+         color:#A8E6F0;line-height:1.8;word-break:break-all}
+.url-box .part-id{color:var(--gold)}
+.url-box .part-path{color:var(--teal)}
+.url-box .part-file{color:#80E880}
+/* Comparison table */
+table{width:100%;border-collapse:collapse;font-size:12px;margin:12px 0}
+th{background:var(--bg3);border:1px solid var(--border);padding:8px 10px;
+   color:var(--gold);font-family:'Cinzel',serif;font-weight:600;font-size:11px;
+   letter-spacing:.06em;text-align:left}
+td{border:1px solid var(--border);padding:8px 10px;color:var(--text);
+   background:var(--bg2);vertical-align:top}
+tr:nth-child(even) td{background:var(--bg3)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>GBF Character Sprite & Animation System</h1>
+<p class="sub">How GBFAP works · how to integrate real GBF assets · implementation options</p>
+
+<!-- ═══ SECTION 1: WHAT GBFAP IS ═══ -->
+<div class="stitle">What GBFAP Is and How It Actually Works</div>
+
+<div class="grid2">
+  <div class="block">
+    <div class="block-title">📦 The Project</div>
+    <p><strong>GBFAP (GBF Animation Player)</strong> by MizaGBF is an open-source MIT-licensed tool that reverse-engineered Cygames' animation system and can play every character's battle animation in-browser. It's what you saw at <code>mizagbf.github.io/GBFAP</code>.</p>
+    <p>The project is <strong>not standalone</strong> — it depends on three sibling repos: <code>GBFML</code> (markup/layout), <code>GBFAL</code> (asset lookup), and <code>GBFCP</code> (CORS proxy server). The animation player itself is the core, but it needs the proxy to actually fetch GBF's assets.</p>
+    <p><span class="tag tgold">MIT License</span><span class="tag tg">Open Source</span><span class="tag tb">Self-hostable</span></p>
+  </div>
+  <div class="block">
+    <div class="block-title">🔑 The Core Problem: CORS</div>
+    <p><strong>GBF assets live on Cygames' CDN</strong> (<code>game-a1.granbluefantasy.jp</code>) and have Cross-Origin policies that block direct browser fetches from other domains.</p>
+    <p>GBFAP solves this with <strong>GBFCP</strong> — a Python proxy server that sits between the browser and GBF's CDN, stripping the CORS restriction. On the public GitHub Pages version, Miza runs this proxy on a small server. When you self-host, you run your own proxy locally.</p>
+    <div class="warn">⚠️ You cannot directly load <code>game-a.granbluefantasy.jp</code> assets in your game without either running your own CORS proxy or downloading the assets to your own server first.</div>
+  </div>
+</div>
+
+<div class="block">
+  <div class="block-title">⚙️ The Animation Engine — CreateJS</div>
+  <p>GBF's battle animations are <strong>CreateJS MovieClips</strong> — specifically <code>createjs.MovieClip</code> from the EaselJS library (part of the CreateJS suite originally built for Flash/HTML5 Canvas output from Adobe Animate). The asset file for each character (<code>unit_[ID].js</code>) is a self-contained JS class that:</p>
+  <div class="grid3">
+    <div style="background:var(--bg3);border:1px solid var(--border);border-radius:3px;padding:14px">
+      <strong style="color:var(--teal);font-size:12px">PART 1 — Spritesheet definition</strong><br><br>
+      <p>Defines which rectangular region of the PNG corresponds to each "part" (head, torso, left arm, weapon, effect layer 1, etc.). Each frame is defined as <code>[x, y, width, height, imageIndex, regX, regY]</code>.</p>
+    </div>
+    <div style="background:var(--bg3);border:1px solid var(--border);border-radius:3px;padding:14px">
+      <strong style="color:var(--teal);font-size:12px">PART 2 — Animation clips</strong><br><br>
+      <p>Named clips like <code>atk</code>, <code>sp</code>, <code>damage</code>, <code>die</code>, <code>idle</code> define which frame sequences to play for each action. Clips can loop or play once.</p>
+    </div>
+    <div style="background:var(--bg3);border:1px solid var(--border);border-radius:3px;padding:14px">
+      <strong style="color:var(--teal);font-size:12px">PART 3 — MovieClip tweens</strong><br><br>
+      <p>A <code>createjs.MovieClip</code> wraps the spritesheet animation and adds tween keyframes — position, scale, rotation, alpha per body part, per frame — via <code>createjs.Tween</code>.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SECTION 2: ASSET URLS ═══ -->
+<div class="stitle">GBF Asset URL Patterns</div>
+
+<div class="block">
+  <div class="block-title">🗂️ Character ID Format</div>
+  <p>GBF character IDs are 10-digit numbers. The first digit encodes rarity/type, the next 3 are the character family, the next 4 are the variation/skin, and the last 2 are usually <code>00</code>. Examples: <strong>3040028000</strong> (SSR Zeta), <strong>3030003000</strong> (SR Rosetta).</p>
+  <p>SSR = <code>304...</code> &nbsp;·&nbsp; SR = <code>303...</code> &nbsp;·&nbsp; R = <code>302...</code> &nbsp;·&nbsp; Main Character = <code>399...</code></p>
+</div>
+
+<div class="block">
+  <div class="block-title">📂 Asset URL Patterns (via CORS proxy)</div>
+  <p>All URLs below are on <code>game-a[1–4].granbluefantasy.jp</code>. In GBFAP, they're prefixed with the CORS proxy URL.</p>
+
+  <p><strong>Battle animation JS file</strong> (the CreateJS MovieClip definition):</p>
+  <div class="url-box">
+    <span class="part-path">https://game-a.granbluefantasy.jp/assets_en/js/nsp_js/</span><span class="part-file">unit_</span><span class="part-id">[CHARACTER_ID]</span><span class="part-file">.js</span>
+    <br><em style="color:var(--dim)">e.g. unit_3040028000.js  — contains the full CreateJS animation definition</em>
+  </div>
+
+  <p><strong>Battle spritesheet PNG</strong> (the texture atlas for the animation):</p>
+  <div class="url-box">
+    <span class="part-path">https://game-a.granbluefantasy.jp/assets_en/img/sp/assets/npc/sd/</span><span class="part-id">[CHARACTER_ID]</span><span class="part-file">.png</span>
+    <br><em style="color:var(--dim)">e.g. 3040028000.png  — all animation frames packed into one image</em>
+  </div>
+
+  <p><strong>Attack effect spritesheet</strong> (separate from character sprite):</p>
+  <div class="url-box">
+    <span class="part-path">https://game-a.granbluefantasy.jp/assets_en/img/sp/assets/npc/sd/</span><span class="part-id">[CHARACTER_ID]</span><span class="part-file">_atk.png</span>
+    <br><em style="color:var(--dim)">Attack VFX sheet — slash trails, hit sparks, element bursts</em>
+  </div>
+
+  <p><strong>Skill (SP) effect spritesheet</strong>:</p>
+  <div class="url-box">
+    <span class="part-path">https://game-a.granbluefantasy.jp/assets_en/img/sp/assets/npc/sd/</span><span class="part-id">[CHARACTER_ID]</span><span class="part-file">_sp.png</span>
+    <br><em style="color:var(--dim)">Skill VFX — element-flavored auras, projectiles, impact frames</em>
+  </div>
+
+  <p><strong>Charge Attack (Ougi) spritesheet</strong>:</p>
+  <div class="url-box">
+    <span class="part-path">https://game-a.granbluefantasy.jp/assets_en/img/sp/assets/npc/sd/</span><span class="part-id">[CHARACTER_ID]</span><span class="part-file">_soul.png</span>
+  </div>
+
+  <p><strong>Portrait (story/scene art)</strong>:</p>
+  <div class="url-box">
+    <span class="part-path">https://game-a.granbluefantasy.jp/assets_en/img_mid/sp/quest/scene/character/body/</span><span class="part-id">[CHARACTER_ID]</span><span class="part-file">_b.png</span>
+    <br><em style="color:var(--dim)">Variants: _b_surprise_up.png · _b_sad.png · _b_laugh_up.png</em>
+  </div>
+
+  <p><strong>Battle thumbnail / icon</strong>:</p>
+  <div class="url-box">
+    <span class="part-path">https://game-a.granbluefantasy.jp/assets_en/img/sp/ui/thumb/</span><span class="part-id">[CHARACTER_ID]</span><span class="part-file">.jpg</span>
+  </div>
+</div>
+
+<!-- ═══ SECTION 3: HOW TO USE GBFAP ═══ -->
+<div class="stitle">How to Use GBFAP in Your Own Game</div>
+
+<div class="block">
+  <div class="block-title">🗺️ The Two Paths</div>
+  <div class="grid2">
+    <div>
+      <p><strong style="color:var(--green)">Path A — Embed GBFAP's player directly</strong></p>
+      <p>GBFAP provides a <code>demo.html</code> that shows the minimum code to embed the animation player as an iframe or component into another page. <code>load_player()</code> is the entry function. This is the <em>fastest</em> path if you just want the player to appear in your game UI.</p>
+      <div class="info">✓ Works immediately &nbsp;·&nbsp; ✓ Gets all updates automatically &nbsp;·&nbsp; ✗ Depends on Miza's proxy (limited bandwidth) &nbsp;·&nbsp; ✗ Can't customize deeply</div>
+    </div>
+    <div>
+      <p><strong style="color:var(--orange)">Path B — Self-host the full stack</strong></p>
+      <p>Clone GBFAP + GBFML + GBFAL, run GBFCP locally (Python proxy), configure <code>config.json</code> to point to your proxy, serve with any HTTP server. Full control. Can download assets locally.</p>
+      <div class="info">✓ Full control &nbsp;·&nbsp; ✓ No bandwidth limits &nbsp;·&nbsp; ✓ Can cache assets locally &nbsp;·&nbsp; ✗ Needs server setup &nbsp;·&nbsp; ✗ Legal grey area with Cygames assets</div>
+    </div>
+  </div>
+</div>
+
+<div class="block">
+  <div class="block-title">📋 Path A: Embed the Player — Step by Step</div>
+  <ol class="steps">
+    <li>Include GBFAP dependencies in your page's <code>&lt;head&gt;</code>:
+<pre><code>&lt;!-- CreateJS (required by GBF's animation files) --&gt;
+&lt;script src="https://code.createjs.com/1.0.0/createjs.min.js"&gt;&lt;/script&gt;
+&lt;!-- Backbone + Underscore (also required by GBF's animation system) --&gt;
+&lt;script src="https://cdnjs.cloudflare.com/ajax/libs/backbone.js/1.4.0/backbone-min.js"&gt;&lt;/script&gt;
+&lt;script src="https://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.13.1/underscore-min.js"&gt;&lt;/script&gt;
+&lt;!-- GBFML utility (required by GBFAP's player) --&gt;
+&lt;script src="https://mizagbf.github.io/GBFML/js/util.js"&gt;&lt;/script&gt;
+&lt;!-- GBFAP player script --&gt;
+&lt;script src="https://mizagbf.github.io/GBFAP/js/player.js"&gt;&lt;/script&gt;</code></pre>
+    </li>
+    <li>Add a canvas container in your HTML:
+<pre><code>&lt;div id="gbfap-container" style="width:480px;height:270px"&gt;
+  &lt;canvas id="gbfap-canvas"&gt;&lt;/canvas&gt;
+&lt;/div&gt;</code></pre>
+    </li>
+    <li>Initialize the player with a character ID and animation type:
+<pre><code>// After page load:
+load_player({
+  use_game_config: "proxy",       // use Miza's CORS proxy
+  canvas: "gbfap-canvas",
+  id: "3040028000",               // character ID (Zeta in this case)
+  type: "npc",                    // "npc" = character, "summon" = summon
+  animation: "atk"                // "atk", "sp", "sp2", "damage", "die", "idle"
+});</code></pre>
+    </li>
+    <li>To switch animations at runtime:
+<pre><code>// Tell the player to play a different animation
+player_switch_animation("sp");   // switch to skill animation
+player_switch_animation("atk");  // switch back to attack</code></pre>
+    </li>
+    <li>To load a different character:
+<pre><code>// Reload the player with a new character ID
+load_player({ id: "3040001000", type: "npc", animation: "atk" });</code></pre>
+    </li>
+  </ol>
+  <div class="warn">⚠️ Miza's proxy has <strong>limited bandwidth</strong> and asks users not to overload it. For production use, run your own GBFCP proxy. Also: using Cygames' assets in your own game without permission is a <strong>legal grey area</strong> — treat it like fan content, not commercial use.</div>
+</div>
+
+<div class="block">
+  <div class="block-title">📋 Path B: Self-Host — Setup Steps</div>
+  <ol class="steps">
+    <li>Clone the required repos into a common root folder:
+<pre><code>mkdir gbf-project && cd gbf-project
+git clone https://github.com/MizaGBF/GBFAP
+git clone https://github.com/MizaGBF/GBFML
+git clone https://github.com/MizaGBF/GBFCP   # CORS proxy
+# optional but useful:
+git clone https://github.com/MizaGBF/GBFAL</code></pre>
+    </li>
+    <li>Install and start the CORS proxy (Python 3.13 required):
+<pre><code>cd GBFCP
+pip install -r requirements.txt
+python app.py           # starts proxy on port 8001
+# or for debug mode:
+python app.py -debug</code></pre>
+    </li>
+    <li>Edit <code>GBFAP/config.json</code> — change <code>use_game_config</code> to <code>"local"</code> and set <code>corsProxy</code> to <code>"http://localhost:8001/"</code>:
+<pre><code>{
+  "use_game_config": "local",
+  "game_config": {
+    "local": {
+      "xjsUri": "CORS/https://game-a.granbluefantasy.jp/...",
+      "jsUri":  "CORS/https://game-a.granbluefantasy.jp/...",
+      "imgUri": "CORS/https://game-a.granbluefantasy.jp/...",
+      "corsProxy": "http://localhost:8001/"
+    }
+  }
+}</code></pre>
+    </li>
+    <li>Start a local HTTP server from the root folder (NOT inside GBFAP):
+<pre><code>cd ..   # back to gbf-project root
+python -m http.server 8080
+# then open: http://localhost:8080/GBFAP/</code></pre>
+    </li>
+    <li><strong>Optional: Download assets locally</strong> using the updater tool to avoid live CDN fetches:
+<pre><code>cd GBFAP
+python updater.py -r          # scan for new content
+python updater.py -d          # download all assets (time-consuming!)
+python updater.py -d 3040028000  # or download one specific character</code></pre>
+    </li>
+  </ol>
+</div>
+
+<!-- ═══ SECTION 4: HOW TO PLAY SPECIFIC ANIMATIONS ═══ -->
+<div class="stitle">Animation Names & What They Play</div>
+
+<div class="block">
+  <div class="block-title">🎬 Animation Clip Reference</div>
+  <table>
+    <tr><th>Animation ID</th><th>Trigger In Game</th><th>Asset file</th><th>Notes</th></tr>
+    <tr><td><code>idle</code></td><td>Standing in battle (loops)</td><td><code>unit_[ID].js</code> + main PNG</td><td>Breathing/hover loop. Always available.</td></tr>
+    <tr><td><code>atk</code></td><td>Normal attack button pressed</td><td><code>unit_[ID].js</code> + <code>[ID]_atk.png</code></td><td>Plays once. Includes lunge, slash, return. DA/TA = atk played 2–3x.</td></tr>
+    <tr><td><code>sp</code></td><td>Skill 1 used</td><td><code>unit_[ID].js</code> + <code>[ID]_sp.png</code></td><td>Character-specific. May include summoning, casting, elemental burst.</td></tr>
+    <tr><td><code>sp2</code></td><td>Skill 2 used (if different animation)</td><td><code>unit_[ID].js</code> + <code>[ID]_sp.png</code></td><td>Not all characters have a separate sp2 animation.</td></tr>
+    <tr><td><code>mortal</code> / <code>ougi</code></td><td>Charge Attack / Ougi</td><td><code>unit_[ID].js</code> + <code>[ID]_soul.png</code></td><td>Full cinematic. Longest animation. Character-specific cutscene.</td></tr>
+    <tr><td><code>damage</code></td><td>Character hit by enemy</td><td><code>unit_[ID].js</code> + main PNG</td><td>Quick recoil animation.</td></tr>
+    <tr><td><code>die</code></td><td>Character knocked out (HP = 0)</td><td><code>unit_[ID].js</code> + main PNG</td><td>Fall/defeat animation.</td></tr>
+    <tr><td><code>appear</code></td><td>Enemy enters the battle (raids)</td><td>Enemy animation files</td><td>GBFAP notes this as a "Raid Entry" animation.</td></tr>
+  </table>
+
+  <div class="info">💡 In GBFAP, you can see all available animation clips for a character using the <strong>playlist button (P)</strong>. Some characters reuse another character's animations when theirs don't exist — GBFAP does its best to match them automatically.</div>
+</div>
+
+<div class="block">
+  <div class="block-title">🔄 Attack Multiplicity (DA / TA)</div>
+  <p>GBF doesn't have separate "DA animation" and "TA animation" files. DA and TA are handled by the <strong>game's battle logic</strong>, not the animation system:</p>
+  <ul style="padding-left:20px;font-size:13px;line-height:2">
+    <li><strong>Normal attack:</strong> Play <code>atk</code> animation once</li>
+    <li><strong>Double Attack (DA):</strong> Play <code>atk</code> animation, then <em>after it completes</em>, trigger the <strong>attack effect sheet</strong> a second time at a slightly different position</li>
+    <li><strong>Triple Attack (TA):</strong> Three sequential <code>atk</code> triggers with staggered timing (~150ms apart)</li>
+    <li><strong>Full Chain Burst:</strong> All party members TA simultaneously → combined Charge Attack fires</li>
+  </ul>
+  <p>The visual "second hit" for DA is the <strong>attack effect animation</strong> (<code>[ID]_atk.png</code>) played again — not a new character animation. The character sprite itself only lunges once; the hit VFX is what repeats.</p>
+</div>
+
+<!-- ═══ SECTION 5: INTEGRATION INTO YOUR GAME ═══ -->
+<div class="stitle">Integrating Into Your Game</div>
+
+<div class="block">
+  <div class="block-title">🏗️ Recommended Architecture</div>
+  <div class="flow">
+    <div class="flow-box">Game Logic<br><em style="color:var(--dim);font-size:10px">turn system, HP, skills</em></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box hi">Animation Manager<br><em style="color:var(--dim);font-size:10px">triggers animations by name</em></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box">GBFAP Player<br><em style="color:var(--dim);font-size:10px">CreateJS canvas overlay</em></div>
+    <div class="flow-arrow">+</div>
+    <div class="flow-box ok">VFX Layer<br><em style="color:var(--dim);font-size:10px">CSS/canvas effects on top</em></div>
+  </div>
+  <p>The GBFAP player renders onto a <strong>Canvas element</strong> sitting in your battle stage. Your game logic sends animation commands to it. On top of the canvas, your CSS/JS VFX layer handles hit flashes, screen effects, damage numbers — things not in the character animation itself.</p>
+</div>
+
+<div class="grid2">
+  <div class="block">
+    <div class="block-title">✅ What GBFAP Provides</div>
+    <ul style="padding-left:18px;font-size:13px;line-height:2.1">
+      <li>Character idle loop animations</li>
+      <li>Attack animations (lunge + weapon slash)</li>
+      <li>Skill casting animations (element-specific)</li>
+      <li>Charge Attack / Ougi cinematics</li>
+      <li>Damage / knocked-out animations</li>
+      <li>Enemy animations</li>
+      <li>Summon call animations</li>
+      <li>Weapon animations (separate asset category)</li>
+      <li>All as real GBF art — identical to the game</li>
+    </ul>
+  </div>
+  <div class="block">
+    <div class="block-title">❌ What You Still Need to Build</div>
+    <ul style="padding-left:18px;font-size:13px;line-height:2.1">
+      <li>HP bars, charge bars, turn counter UI</li>
+      <li>Screen flash on hit</li>
+      <li>Damage number popups</li>
+      <li>DA/TA hit sequencing logic</li>
+      <li>Skill icon → animation name mapping</li>
+      <li>Enemy HP bar + mode gauge</li>
+      <li>Charge diamond tracking (per-player)</li>
+      <li>Party/character slot positioning layout</li>
+      <li>Battle result screen</li>
+    </ul>
+  </div>
+</div>
+
+<div class="block">
+  <div class="block-title">💻 Minimal Integration Code</div>
+  <p>This is the cleanest pattern for triggering GBFAP from your battle system:</p>
+<pre><code>// ── 1. Setup: map your characters to their GBF IDs ──────────────────────
+const PARTY = [
+  { name: 'Zeta',    id: '3040028000', element: 'fire'  },
+  { name: 'Narmaya', id: '3040213000', element: 'dark'  },
+  { name: 'Yodarha', id: '3040110000', element: 'water' },
+];
+
+// ── 2. Initialize GBFAP for each character slot ─────────────────────────
+// Each slot gets its own canvas element
+PARTY.forEach((char, slotIdx) => {
+  load_player({
+    use_game_config: "proxy",     // or "local" if self-hosting
+    canvas: `char-canvas-${slotIdx}`,
+    id: char.id,
+    type: "npc",
+    animation: "idle"             // start in idle loop
+  });
+});
+
+// ── 3. Trigger animations from your battle system ───────────────────────
+function onAttack(slotIdx, attackType) {
+  const canvas = `char-canvas-${slotIdx}`;
+  
+  // Switch to attack animation, then return to idle when done
+  player_switch_animation("atk", canvas);
+  
+  // DA: trigger VFX second hit after ~400ms (atk anim duration)
+  if (attackType === 'da') {
+    setTimeout(() => triggerHitVFX(slotIdx, 2), 400);
+  }
+  
+  // TA: trigger 3 hit VFX in sequence
+  if (attackType === 'ta') {
+    [0, 150, 300].forEach((delay, i) => {
+      setTimeout(() => triggerHitVFX(slotIdx, i + 1), delay + 350);
+    });
+  }
+  
+  // Return to idle after attack completes (~800ms)
+  setTimeout(() => player_switch_animation("idle", canvas), 800);
+}
+
+function onSkill(slotIdx, skillNum) {
+  const canvas = `char-canvas-${slotIdx}`;
+  const animName = skillNum === 1 ? "sp" : "sp2";
+  player_switch_animation(animName, canvas);
+  // Skills typically run longer — return to idle after ~1500ms
+  setTimeout(() => player_switch_animation("idle", canvas), 1500);
+}
+
+function onChargeAttack(slotIdx) {
+  const canvas = `char-canvas-${slotIdx}`;
+  player_switch_animation("mortal", canvas);  // or "ougi"
+  // CA animations vary in length — listen for animation end if possible
+  setTimeout(() => player_switch_animation("idle", canvas), 3500);
+}
+
+function onDamaged(slotIdx) {
+  const canvas = `char-canvas-${slotIdx}`;
+  player_switch_animation("damage", canvas);
+  setTimeout(() => player_switch_animation("idle", canvas), 500);
+}</code></pre>
+</div>
+
+<!-- ═══ SECTION 6: OPTION COMPARISON ═══ -->
+<div class="stitle">Complete Options Comparison</div>
+
+<div class="block">
+  <table>
+    <tr>
+      <th>Approach</th>
+      <th>Visual Quality</th>
+      <th>Setup Effort</th>
+      <th>Legal</th>
+      <th>Best For</th>
+    </tr>
+    <tr>
+      <td><strong>GBFAP embed (Miza's proxy)</strong></td>
+      <td>⭐⭐⭐⭐⭐ Exact GBF art</td>
+      <td>Low — ~20 lines of JS</td>
+      <td>Grey area — fan project, not commercial</td>
+      <td>Personal/fan projects, prototyping</td>
+    </tr>
+    <tr>
+      <td><strong>GBFAP self-hosted + local proxy</strong></td>
+      <td>⭐⭐⭐⭐⭐ Exact GBF art</td>
+      <td>Medium — Python server setup</td>
+      <td>Same grey area, more stable</td>
+      <td>Fan games wanting full control</td>
+    </tr>
+    <tr>
+      <td><strong>GBFAP + downloaded assets</strong></td>
+      <td>⭐⭐⭐⭐⭐ Exact GBF art, offline</td>
+      <td>High — download hundreds of MB</td>
+      <td>Hosting Cygames assets — riskier</td>
+      <td>Offline/packaged fan games</td>
+    </tr>
+    <tr>
+      <td><strong>Custom sprites (original art)</strong></td>
+      <td>⭐⭐⭐ Depends on your artist</td>
+      <td>Very high — commission/create art</td>
+      <td>✅ Clean — your own assets</td>
+      <td>Commercial projects, original games</td>
+    </tr>
+    <tr>
+      <td><strong>CSS/JS VFX only (our battle preview)</strong></td>
+      <td>⭐⭐ Stylized, no real sprites</td>
+      <td>Zero — already done</td>
+      <td>✅ Clean — no external assets</td>
+      <td>Prototyping, web-only minimal games</td>
+    </tr>
+    <tr>
+      <td><strong>PixiJS + custom sprites</strong></td>
+      <td>⭐⭐⭐⭐ Excellent performance</td>
+      <td>High — full game engine setup</td>
+      <td>Depends on your art assets</td>
+      <td>Serious game projects</td>
+    </tr>
+  </table>
+</div>
+
+<div class="success">
+  <strong>Bottom line for your game:</strong> If it's a fan project — embed GBFAP with <code>load_player()</code> and map your skill system to animation names. If you want full control without CDN dependency, self-host with your own GBFCP proxy and optionally download assets locally with the updater tool. The battle VFX layer (hit flashes, damage numbers, screen effects) you already have from the previous preview — GBFAP handles the character animation part on top of that.
+</div>
+
+</div><!-- /wrap -->
+</body>
+</html>

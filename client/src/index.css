@@ -583,3 +583,8 @@ input:focus, select:focus {
     padding-right: max(16px, env(safe-area-inset-right));
   }
 }
+
+@keyframes pulse-border {
+  0%, 100% { box-shadow: 0 0 6px rgba(64,144,255,0.3); border-color: rgba(64,144,255,0.6); }
+  50%       { box-shadow: 0 0 14px rgba(64,144,255,0.7); border-color: rgba(64,144,255,1.0); }
+}

@@ -28,3 +28,4 @@ export {
 export { WEAPONS }    from './weapons.js';
 export { CHARACTERS } from './characters.js';
 export { BOSSES }     from './bosses.js';
+export { MC_CLASSES, MC_CLASS_MAP, MC_DEFAULT_CLASS_ID } from './mcClasses.js';

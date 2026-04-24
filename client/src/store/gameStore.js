@@ -32,13 +32,19 @@ export const useGameStore = create((set, get) => ({
   catalog_characters: [],
   catalog_weapons: [],
   catalog_bosses: [],
+  catalog_mc_classes: [],
+  mc_class_id: 'MC_FIGHTER',
+  setMcClass: (id) => set({ mc_class_id: id, mc_selected_skills: [] }),
+  mc_selected_skills: [], // up to 3 subskill names selected from current class
+  setMcSelectedSkills: (skills) => set({ mc_selected_skills: skills }),
   loadCatalog: async () => {
-    const [chars, weaps, bosses] = await Promise.all([
+    const [chars, weaps, bosses, mc_classes] = await Promise.all([
       fetch(`${API}/catalog/characters`).then(r => r.json()),
       fetch(`${API}/catalog/weapons`).then(r => r.json()),
       fetch(`${API}/catalog/bosses`).then(r => r.json()),
+      fetch(`${API}/catalog/mc-classes`).then(r => r.json()),
     ]);
-    set({ catalog_characters: chars, catalog_weapons: weaps, catalog_bosses: bosses });
+    set({ catalog_characters: chars, catalog_weapons: weaps, catalog_bosses: bosses, catalog_mc_classes: mc_classes });
   },
 
   // ── Party / Grid ─────────────────────────────────────────────────────────────
@@ -236,11 +242,23 @@ export const useGameStore = create((set, get) => ({
     if (!socket?.connected) get().initSocket();
     set({ current_room_id: room_id, turn_log: [], raid_result: null, is_attacking: false, screen: 'battle' });
     setTimeout(() => {
+      const { mc_class_id, mc_selected_skills, catalog_mc_classes } = get();
+      const mc_class = catalog_mc_classes.find(cl => cl.id === mc_class_id);
       socket.emit('join_room', {
         room_id, player_id,
         player_name: player_name || 'Adventurer',
         party_config: { character_ids: party_character_ids.filter(Boolean) },
         grid_config: { weapon_ids: grid_weapon_ids.filter(Boolean) },
+        mc_config: {
+          class_id: mc_class_id,
+          class_name: mc_class?.name || 'Fighter',
+          base_hp: mc_class?.base_hp || 1820,
+          base_atk: mc_class?.base_atk || 6200,
+          preset_skill: mc_class?.preset_skill || null,
+          selected_skills: mc_selected_skills.slice(0, 3),
+          charge_attack: mc_class?.charge_attack || null,
+          element: grid_weapon_ids.filter(Boolean).length > 0 ? null : 'FIRE', // server will set from main weapon
+        },
       });
     }, 100);
   },
@@ -256,12 +274,22 @@ export const useGameStore = create((set, get) => ({
     // Optimistically grey out the button immediately
     const state = get().my_state;
     if (state) {
-      const catalog_char = get().catalog_characters?.find(cc => cc.id === char_id);
-      const ab = catalog_char?.abilities?.find(a => a.id === ability_id);
+      // For MC (char_id === 'MC'), look up ability from the MC's runtime abilities list
+      // For party chars, look up from catalog
+      const runtime_char = state.characters.find(c => c.id === char_id);
+      let cooldown_max = null;
+      if (char_id === 'MC') {
+        const mc_ab = runtime_char?.abilities?.find(a => a.id === ability_id);
+        cooldown_max = mc_ab?.cooldown_max ?? null;
+      } else {
+        const catalog_char = get().catalog_characters?.find(cc => cc.id === char_id);
+        const ab = catalog_char?.abilities?.find(a => a.id === ability_id);
+        cooldown_max = ab?.cooldown_max ?? null;
+      }
       const chars = state.characters.map(c => {
         if (c.id !== char_id) return c;
         const cds = { ...(c.ability_cooldowns || {}) };
-        if (ab) cds[ability_id] = ab.cooldown_max;
+        if (cooldown_max !== null) cds[ability_id] = cooldown_max;
         return { ...c, ability_cooldowns: cds };
       });
       set({ my_state: { ...state, characters: chars } });
