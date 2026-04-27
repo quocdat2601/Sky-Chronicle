@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import { io } from 'socket.io-client';
+import { animationBus } from '../systems/animation/animationBus.js';
+import { GBF_MOTION, GBF_TIMING_MS } from '../systems/animation/animationTimings.js';
 
 const API = '/api';
 let socket = null;
@@ -227,7 +229,23 @@ export const useGameStore = create((set, get) => ({
 
     socket.on('opening_log', ({ log }) => {
       const stamp = ts();
-      for (const ev of (log || [])) get().pushLog({ ...ev, ts: stamp });
+      const myChars = get().my_state?.characters || [];
+      const findCharIdByName = (name) => (myChars.find(c => c.name === name)?.id) || null;
+      for (const ev of (log || [])) {
+        get().pushLog({ ...ev, ts: stamp });
+        if (ev.type === 'BOSS_CHARGE_ATTACK') {
+          const bossId = ev.source_id || get().raid_state?.boss?.id;
+          if (bossId) animationBus.trigger(`boss:${bossId}`, GBF_MOTION.CHARGE, GBF_TIMING_MS.CHARGE, GBF_MOTION.IDLE);
+        }
+        if (ev.type === 'BOSS_CA_HIT') {
+          const tid = findCharIdByName(ev.target);
+          if (tid) animationBus.trigger(`char:${tid}`, GBF_MOTION.DAMAGE, GBF_TIMING_MS.DAMAGE, GBF_MOTION.IDLE);
+        }
+        if (ev.type === 'ALLY_KO') {
+          const tid = findCharIdByName(ev.target);
+          if (tid) animationBus.trigger(`char:${tid}`, GBF_MOTION.DEAD, 0, GBF_MOTION.DEAD);
+        }
+      }
     });
 
     socket.on('player_joined', ({ name }) => {
@@ -253,7 +271,12 @@ export const useGameStore = create((set, get) => ({
           target_id: my_state?.target_id ?? s.target_id,
         };
       });
-      for (const ev of (log || [])) get().pushLog({ ...ev, ts: stamp });
+      for (const ev of (log || [])) {
+        get().pushLog({ ...ev, ts: stamp });
+        if (ev.type === 'ABILITY') {
+          animationBus.trigger(`char:${ev.char_id}`, GBF_MOTION.SKILL_1, GBF_TIMING_MS.SKILL, GBF_MOTION.IDLE);
+        }
+      }
     });
 
     socket.on('summon_result', ({ log, shared_boss_hp, my_state }) => {
@@ -295,6 +318,9 @@ export const useGameStore = create((set, get) => ({
     // ── My attack turn resolved ────────────────────────────────────────────────
     socket.on('turn_result', ({ turn_number, attack_log, boss_log, shared_boss_hp, entity_hp, my_state, player_defeated }) => {
       const stamp = ts();
+      const ms = my_state || get().my_state;
+      const myChars = ms?.characters || [];
+      const findCharIdByName = (name) => (myChars.find(c => c.name === name)?.id) || null;
       set(s => ({
         is_attacking: false,
         my_state: my_state || s.my_state,
@@ -312,6 +338,23 @@ export const useGameStore = create((set, get) => ({
 
       for (const ev of attack_log) {
         get().pushLog({ ...ev, ts: stamp });
+        if (ev.type === 'NORMAL_ATTACK') {
+          const key = `char:${ev.char_id}`;
+          animationBus.trigger(key, GBF_MOTION.ATTACK, GBF_TIMING_MS.ATTACK, GBF_MOTION.IDLE);
+          if (ev.hit_type === 'DA') {
+            setTimeout(() => animationBus.trigger(key, GBF_MOTION.ATTACK, GBF_TIMING_MS.ATTACK, GBF_MOTION.IDLE), GBF_TIMING_MS.DA_DELAY);
+          }
+          if (ev.hit_type === 'TA') {
+            setTimeout(() => animationBus.trigger(key, GBF_MOTION.ATTACK, GBF_TIMING_MS.ATTACK, GBF_MOTION.IDLE), GBF_TIMING_MS.TA_DELAY_2);
+            setTimeout(() => animationBus.trigger(key, GBF_MOTION.ATTACK, GBF_TIMING_MS.ATTACK, GBF_MOTION.IDLE), GBF_TIMING_MS.TA_DELAY_3);
+          }
+        }
+        if (ev.type === 'ABILITY') {
+          animationBus.trigger(`char:${ev.char_id}`, GBF_MOTION.SKILL_1, GBF_TIMING_MS.SKILL, GBF_MOTION.IDLE);
+        }
+        if (ev.type === 'CHARGE_ATTACK') {
+          animationBus.trigger(`char:${ev.char_id}`, GBF_MOTION.CHARGE, GBF_TIMING_MS.CHARGE, GBF_MOTION.IDLE);
+        }
         if (ev.type === 'CHAIN_BURST') {
           set({ chain_burst_anim: { count: ev.chain_count, bonus_pct: ev.bonus_pct } });
           setTimeout(() => set({ chain_burst_anim: null }), 2000);
@@ -319,6 +362,23 @@ export const useGameStore = create((set, get) => ({
       }
       for (const ev of boss_log) {
         get().pushLog({ ...ev, ts: stamp });
+        if (ev.type === 'BOSS_ATTACK') {
+          if (ev.source_id) animationBus.trigger(`boss:${ev.source_id}`, GBF_MOTION.ATTACK, GBF_TIMING_MS.ATTACK, GBF_MOTION.IDLE);
+          const tid = findCharIdByName(ev.target_char);
+          if (tid) animationBus.trigger(`char:${tid}`, GBF_MOTION.DAMAGE, GBF_TIMING_MS.DAMAGE, GBF_MOTION.IDLE);
+        }
+        if (ev.type === 'BOSS_CHARGE_ATTACK') {
+          const bossId = ev.source_id || get().raid_state?.boss?.id;
+          if (bossId) animationBus.trigger(`boss:${bossId}`, GBF_MOTION.CHARGE, GBF_TIMING_MS.CHARGE, GBF_MOTION.IDLE);
+        }
+        if (ev.type === 'BOSS_CA_HIT') {
+          const tid = findCharIdByName(ev.target);
+          if (tid) animationBus.trigger(`char:${tid}`, GBF_MOTION.DAMAGE, GBF_TIMING_MS.DAMAGE, GBF_MOTION.IDLE);
+        }
+        if (ev.type === 'ALLY_KO') {
+          const tid = findCharIdByName(ev.target);
+          if (tid) animationBus.trigger(`char:${tid}`, GBF_MOTION.DEAD, 0, GBF_MOTION.DEAD);
+        }
         if (ev.type === 'PHASE_CHANGE') {
           set({ phase_anim: { phase: ev.phase, description: ev.description } });
           setTimeout(() => set({ phase_anim: null }), 3000);

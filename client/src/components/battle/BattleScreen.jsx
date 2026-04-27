@@ -2,6 +2,8 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useGameStore } from '../../store/gameStore.js';
 import { ElementBadge, BossHpBar, StatusEffectList, formatNumber } from '../../lib/ui.jsx';
 import { useVFX } from '../../lib/useVFX.js';
+import CharacterSprite from './CharacterSprite.jsx';
+import EnemySprite from './EnemySprite.jsx';
 
 const ELEM_CLR = { FIRE:'#ff5020', WATER:'#30b4ff', EARTH:'#88cc44', WIND:'#a0ffb0', LIGHT:'#ffe860', DARK:'#c060ff' };
 const ELEM_RGB = { FIRE:'255,80,32', WATER:'48,180,255', EARTH:'136,204,68', WIND:'160,255,176', LIGHT:'255,232,96', DARK:'192,96,255' };
@@ -398,7 +400,14 @@ function BossSection({ boss, sub_entities, local_main, local_subs, target_id, on
           background:'linear-gradient(135deg,rgba(140,10,10,0.5),rgba(40,0,0,0.4))',
           border:'1px solid rgba(200,32,32,0.35)',
           display:'flex',alignItems:'center',justifyContent:'center',fontSize:'2.5rem',
-        }}>🐉</div>
+          overflow:'hidden',
+          position:'relative',
+        }}>
+          <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center'}}>
+            🐉
+          </div>
+          <EnemySprite bossId={selected.id} size={68} style={{position:'absolute',inset:0,width:'100%',height:'100%'}} />
+        </div>
         <div style={{flex:1,minWidth:0}}>
           {entities.length > 1 && (
             <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:6}}>
@@ -566,8 +575,14 @@ function CharOverviewCard({ char, slot_num, cat_char, is_selected, onSelect, car
         background:`linear-gradient(135deg,rgba(${rgb},0.25),rgba(0,0,0,0.3))`,
         border:`1px solid ${ELEM_CLR[char.element]||'var(--border-dim)'}`,
         display:'flex',alignItems:'center',justifyContent:'center',fontSize:'1rem',position:'relative',
+        overflow:'hidden',
       }}>
-        {dead?'💀':'👤'}
+        <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          {dead?'💀':'👤'}
+        </div>
+        {!dead && (
+          <CharacterSprite charId={char.id} size={36} style={{position:'absolute',inset:0,width:'100%',height:'100%'}} />
+        )}
         <div style={{position:'absolute',bottom:2,right:2,width:5,height:5,borderRadius:'50%',background:ELEM_CLR[char.element]||'#888'}}/>
       </div>
       <div style={{flex:1,minWidth:0}}>
